@@ -55,20 +55,6 @@
       "module": "Ping_Scanner_sub",
       "class": "PingScanner",
       "icon": "🌐"
-    },
-    {
-      "name": "Docker远程管理",
-      "description": "连接物理机管理Docker容器。功能：\n  1.容器管理 - 创建、启动、停止、删除容器\n  2.镜像管理 - 导入、导出、批量迁移镜像\n  3.网络管理 - 创建macvlan网络、添加网卡\n  4.批量导入 - 从Excel配置批量创建容器",
-      "module": "Linux_Docker_Tool_sub",
-      "class": "DockerManager",
-      "icon": "📦"
-    },
-    {
-      "name": "远程抓包",
-      "description": "通过SSH远程执行tcpdump抓包，支持SIP/协议/IP/端口过滤，自动下载到本地",
-      "module": "Tcpdump_Capture_sub",
-      "class": "TcpdumpCapture",
-      "icon": "📡"
     }
   ]
 }
