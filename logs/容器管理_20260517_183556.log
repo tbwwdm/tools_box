@@ -1,6 +1,0 @@
-2026-05-17 18:36:07,695 - INFO - [10.10.40.13] Docker 已连接, 版本: 26.1.4
-2026-05-17 18:36:32,375 - INFO - 加载配置: 3 个模块
-2026-05-17 18:39:42,210 - INFO - 已加载: /opt/mswitch/UTEx-BMCF/log/err.log (1273 字符)
-2026-05-17 18:39:47,064 - INFO - [成功] 已保存: /opt/mswitch/UTEx-BMCF/log/err.log
-2026-05-17 18:39:52,394 - INFO - [错误] 无法读取: /opt/mswitch/UTEx-BMCF/log/err.log//opt/mswitch/UTEx-BMCF/log/err.log
-2026-05-17 18:39:54,411 - INFO - [错误] 路径不存在: /opt/mswitch/UTEx-BMCF/log/err.log//opt/mswitch/UTEx-BMCF/log

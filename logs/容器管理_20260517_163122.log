@@ -1,3 +1,0 @@
-2026-05-17 16:31:29,638 - INFO - [10.10.10.221] Docker 已连接, 版本: 18.09.0
-2026-05-17 16:31:45,249 - INFO - [10.10.40.13] Docker 已连接, 版本: 26.1.4
-2026-05-17 16:33:35,873 - INFO - [错误] 路径不存在: docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' SYL-cMRFP01
