@@ -4052,3 +4052,4 @@ if __name__ == "__main__":
     w = DockerManager()
     w.show()
     sys.exit(app.exec())
+
