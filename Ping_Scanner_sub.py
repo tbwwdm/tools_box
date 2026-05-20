@@ -1,4 +1,4 @@
-import sys
+import sys, os, logging
 import subprocess
 import platform
 from concurrent.futures import ThreadPoolExecutor
@@ -11,6 +11,8 @@ from PySide6.QtCore import QThread, Signal, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QFont, QLinearGradient, QPen, QBrush
 from datetime import datetime
 import time
+
+# v1.3 — 起始/结束输入框加高至26px; 按钮同步统一高度
 
 
 
@@ -125,7 +127,7 @@ class PingScanner(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("网段 Ping 扫描器")
-        self.setMinimumSize(580, 520)
+        self.setMinimumSize(680, 520)
         self.cells = []
         self.worker = None
         self._alive_count = 0
@@ -134,6 +136,18 @@ class PingScanner(QWidget):
         self._result_timer = QTimer()
         self._result_timer.setInterval(30)
         self._result_timer.timeout.connect(self._process_next_result)
+
+        log_dir = os.path.join(os.path.dirname(__file__), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        fh = logging.FileHandler(
+            os.path.join(log_dir, f"PingScanner_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"),
+            encoding="utf-8")
+        fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        self.logger = logging.getLogger(f"{__name__}.PingScanner")
+        self.logger.addHandler(fh)
+        self.logger.setLevel(logging.INFO)
+        self.logger.info("PingScanner initialized")
+
         self._setup_ui()
 
     def _setup_ui(self):
@@ -148,61 +162,71 @@ class PingScanner(QWidget):
         top_layout.setContentsMargins(10, 8, 10, 8)
         top_layout.setSpacing(6)
 
-        ctrl_row = QHBoxLayout()
-        ctrl_row.setSpacing(8)
-        ctrl_row.addWidget(QLabel("起始地址:"))
+        input_row = QHBoxLayout()
+        input_row.setSpacing(8)
+        input_row.addWidget(QLabel("起始地址:"))
         self.start_ip = QLineEdit()
         self.start_ip.setPlaceholderText("如 192.168.1.10")
         self.start_ip.setFixedWidth(150)
+        self.start_ip.setFixedHeight(26)
         self.start_ip.textChanged.connect(self._update_preview)
         self.start_ip.textChanged.connect(self._validate_inputs)
-        ctrl_row.addWidget(self.start_ip)
+        input_row.addWidget(self.start_ip)
 
-        ctrl_row.addWidget(QLabel("结束:"))
+        input_row.addWidget(QLabel("结束:"))
         self.end_ip = QSpinBox()
         self.end_ip.setRange(1, 254)
         self.end_ip.setValue(254)
         self.end_ip.setFixedWidth(65)
+        self.end_ip.setFixedHeight(26)
         self.end_ip.valueChanged.connect(self._validate_inputs)
-        ctrl_row.addWidget(self.end_ip)
+        input_row.addWidget(self.end_ip)
 
         self.end_preview = QLabel("")
         self.end_preview.setStyleSheet("color: #999;")
-        ctrl_row.addWidget(self.end_preview)
+        input_row.addWidget(self.end_preview)
+
+        input_row.addStretch()
 
         self.start_btn = QPushButton("开始扫描")
         self.start_btn.setFixedWidth(100)
+        self.start_btn.setFixedHeight(26)
         self.start_btn.setStyleSheet("QPushButton { background: #1976d2; color: white; border: none; padding: 4px 12px; border-radius: 3px; font-weight: bold; } QPushButton:disabled { background: #bbb; } QPushButton:hover { background: #1565c0; }")
         self.start_btn.clicked.connect(self.start_scan)
-        ctrl_row.addWidget(self.start_btn)
+        input_row.addWidget(self.start_btn)
 
         self.stop_btn = QPushButton("停止")
         self.stop_btn.setFixedWidth(80)
+        self.stop_btn.setFixedHeight(26)
         self.stop_btn.setEnabled(False)
         self.stop_btn.setStyleSheet("QPushButton { background: #d32f2f; color: white; border: none; padding: 4px 12px; border-radius: 3px; font-weight: bold; } QPushButton:disabled { background: #bbb; } QPushButton:hover { background: #c62828; }")
         self.stop_btn.clicked.connect(self.stop_scan)
-        ctrl_row.addWidget(self.stop_btn)
+        input_row.addWidget(self.stop_btn)
 
-        ctrl_row.addStretch()
+        top_layout.addLayout(input_row)
+
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+
+        self.status_label = QLabel("就绪")
+        self.status_label.setStyleSheet("color: #666; font-size: 11px;")
+        status_row.addWidget(self.status_label)
+
+        status_row.addStretch()
 
         legend_items = [
             (QColor(255, 255, 255), "未扫描"),
             (QColor(76, 175, 80), "通"),
-            #(QColor(255, 238, 180), "待重试"),
             (QColor(255, 235, 59), "不通"),
         ]
         for clr, text in legend_items:
             f = QFrame()
             f.setFixedSize(14, 14)
             f.setStyleSheet(f"background: {clr.name()}; border: 1px solid #999;")
-            ctrl_row.addWidget(f)
-            ctrl_row.addWidget(QLabel(text))
+            status_row.addWidget(f)
+            status_row.addWidget(QLabel(text))
 
-        top_layout.addLayout(ctrl_row)
-
-        self.status_label = QLabel("就绪")
-        self.status_label.setStyleSheet("color: #666; font-size: 11px;")
-        top_layout.addWidget(self.status_label)
+        top_layout.addLayout(status_row)
 
         main_layout.addWidget(top_panel)
 
@@ -319,6 +343,7 @@ class PingScanner(QWidget):
         self.stop_btn.setEnabled(True)
         self.status_label.setText(f"正在扫描 {base}.{ip_start} - {base}.{ip_end} ...")
         self._log(f"开始扫描 {base}.{ip_start} - {base}.{ip_end} ({ip_end - ip_start + 1}个) 10线程 两轮并发")
+        self.logger.info(f"开始扫描 {base}.{ip_start} - {base}.{ip_end} ({ip_end - ip_start + 1}个)")
 
         if self.worker and self.worker.isRunning():
             self.worker.stop()
@@ -334,6 +359,7 @@ class PingScanner(QWidget):
             self.worker.stop()
             self.worker.wait()
             self._log("用户手动停止扫描")
+            self.logger.info("用户手动停止扫描")
             self._on_finished()
 
     def _on_result(self, idx, level):
@@ -359,6 +385,7 @@ class PingScanner(QWidget):
         total = self._alive_count + self._dead_count
         self.status_label.setText(f"扫描完成: {self._alive_count} 通, {self._dead_count} 不通 / 共 {total}")
         self._log(f"扫描完成: {self._alive_count} 通, {self._dead_count} 不通")
+        self.logger.info(f"扫描完成: {self._alive_count} 通, {self._dead_count} 不通")
 
 
 if __name__ == "__main__":
