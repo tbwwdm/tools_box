@@ -196,5 +196,6 @@ if __name__ == "__main__":
     tl.itemDoubleClicked.connect(do_launch)
     lb.clicked.connect(do_launch)
 
+
     w.show()
     sys.exit(app.exec())
