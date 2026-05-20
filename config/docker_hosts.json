@@ -1,0 +1,65 @@
+[
+  {
+    "host": "10.10.10.221",
+    "port": 22,
+    "user": "root",
+    "pwd": "Genew@123",
+    "desc": "MOK-测试机"
+  },
+  {
+    "host": "10.10.30.13",
+    "port": 22,
+    "user": "root",
+    "pwd": "Genew@123",
+    "desc": "BOG-SERVER1"
+  },
+  {
+    "host": "10.10.30.14",
+    "port": 22,
+    "user": "root",
+    "pwd": "Genew@123",
+    "desc": "BOG-SERVER2"
+  },
+  {
+    "host": "10.10.40.13",
+    "port": 22,
+    "user": "root",
+    "pwd": "Genew@123",
+    "desc": "SYL-SERVER1"
+  },
+  {
+    "host": "10.10.40.14",
+    "port": 22,
+    "user": "root",
+    "pwd": "Genew@123",
+    "desc": "SYL-SERVER2"
+  },
+  {
+    "host": "10.10.50.13",
+    "port": 22,
+    "user": "root",
+    "pwd": "Genew@123",
+    "desc": "KHL-SERVER1"
+  },
+  {
+    "host": "10.10.50.14",
+    "port": 22,
+    "user": "root",
+    "pwd": "Genew@123",
+    "desc": "KHL-SERVER2"
+  },
+  {
+    "host": "10.10.60.13",
+    "port": 22,
+    "user": "root",
+    "pwd": "Genew@123",
+    "desc": "CTG-SERVER1"
+  },
+  {
+    "host": "10.10.60.14",
+    "port": 22,
+    "user": "root",
+    "pwd": "Genew@123",
+    "desc": "CTG-SERVER2"
+  }
+]
