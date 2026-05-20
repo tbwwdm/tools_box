@@ -102,6 +102,7 @@ XIAOMI_SS = """
     }
 """
 
+
 def _load_hosts():
     cfg = os.path.join(BASE_DIR, "config", "hosts.json")
     try:
