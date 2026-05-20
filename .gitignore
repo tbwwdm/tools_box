@@ -181,3 +181,6 @@ docker-compose.override.yml
 # 配置文件（如果包含本地路径）
 config.local.*
 *.local.*
+Toolbox_Main.build/
+Toolbox_Main.dist/
+
