@@ -462,9 +462,10 @@ class CreateNetworkDialog(QDialog):
                 selection-background-color: #e8f0fe; selection-color: #1a1a1a;
             }}
         """
-        self.subnet_combo.setStyleSheet(cs + f"""
-            QComboBox::down-arrow {{ image: url({arrow_path}); }}
-        """)
+        for cb in (self.net_driver, self.net_nic):
+            cb.setStyleSheet(cs + f"""
+                QComboBox::down-arrow {{ image: url({arrow_path}); }}
+            """)
 
     def _populate_combos(self):
         self.net_nic.clear()

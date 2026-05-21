@@ -1,11 +1,11 @@
 {
   "远程抓包": true,
   "IMS网元升级": true,
-  "网段Ping扫描器": true,
   "Docker自动化": true,
   "批量配置NTP": true,
-  "批量用户管理": false,
+  "网段Ping扫描器": true,
   "SSH端口配置": false,
+  "批量用户管理": false,
   "安全基线检查": false,
   "密码生成器": false,
   "SSH登录测试": false,
