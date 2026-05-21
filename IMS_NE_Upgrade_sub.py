@@ -949,6 +949,8 @@ class IMSEUpgradeTool(QWidget):
                 padding: 6px 4px; font-size: 13px; background: #f8f9fa;
                 color: #2d3436;
             }
+            QComboBox::down-arrow { image: none; }
+            QComboBox::drop-down { border: none; width: 0; }
             QLineEdit:focus, QComboBox:focus {
                 border-bottom: 2px solid #0984e3;
             }
@@ -1321,7 +1323,7 @@ class IMSEUpgradeTool(QWidget):
                     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                     ssh.connect(self._conn_host, port=self._conn_port,
                                 username=self._conn_user, password=self._conn_pwd,
-                                timeout=2)
+                                timeout=1)
                     ssh.close()
                     self.result.emit(True, "")
                 except Exception as e:
