@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Docker 远程管理工具  v2.6.0
+Docker 远程管理工具  v2.12.1
 通过SSH连接远程服务器，管理Docker容器、网络等
 """
 
@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit, QFileDialog, QProgressBar, QAbstractItemView, QListWidget, QListWidgetItem,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QPoint, QEvent, QRect
-from PySide6.QtGui import QFont, QColor, QPainter, QPixmap, QPolygon, QPalette, QPen
+from PySide6.QtGui import QFont, QColor, QPainter, QPixmap, QPolygon, QPalette, QPen, QAction
 from PySide6.QtWidgets import QStyle
 import paramiko
 
@@ -52,34 +52,34 @@ STYLE_INPUT_FLAT = """
 """
 STYLE_BTN_PRIMARY = """
     QPushButton {
-        background: #5b7a9a; color: white; border: none;
+        background: #0984e3; color: white; border: none;
         padding: 8px 24px; border-radius: 4px; font-weight: bold; font-size: 13px;
     }
-    QPushButton:hover { background: #4e6b89; }
-    QPushButton:disabled { background: #c8d0d8; }
+    QPushButton:hover { background: #0873c4; }
+    QPushButton:disabled { background: #b2bec3; color: #dfe6e9; }
 """
 STYLE_BTN_DANGER = """
     QPushButton {
-        background: #b85450; color: white; border: none;
+        background: #d63031; color: white; border: none;
         padding: 8px 24px; border-radius: 4px; font-weight: bold; font-size: 13px;
     }
-    QPushButton:hover { background: #a34945; }
-    QPushButton:disabled { background: #c8d0d8; }
+    QPushButton:hover { background: #b3292a; }
+    QPushButton:disabled { background: #b2bec3; color: #dfe6e9; }
 """
 STYLE_BTN_SUCCESS = """
     QPushButton {
-        background: #5d8a6a; color: white; border: none;
+        background: #27ae60; color: white; border: none;
         padding: 8px 24px; border-radius: 4px; font-weight: bold; font-size: 13px;
     }
-    QPushButton:hover { background: #4f7a5d; }
-    QPushButton:disabled { background: #c8d0d8; }
+    QPushButton:hover { background: #1e914f; }
+    QPushButton:disabled { background: #b2bec3; color: #dfe6e9; }
 """
 STYLE_BTN_CTRL = """
     QPushButton {
         border: none; border-radius: 3px;
         padding: 5px 14px; font-size: 12px; font-weight: bold; color: white;
     }
-    QPushButton:disabled { background: #c8d0d8; color: #e8ecf0; }
+    QPushButton:disabled { background: #b2bec3; color: #dfe6e9; }
 """
 STYLE_BTN_CANCEL = """
     QPushButton {
@@ -262,12 +262,40 @@ class DockerSSHWorker(QThread):
         return data
 
 
-class _ComboDelegate(QStyledItemDelegate):
+class _ComboHoverDelegate(QStyledItemDelegate):
+    """Forces correct text/background colors on QComboBox popup items.
+
+    Works around a Qt Fusion+QStyleSheetStyle bug where hover color (#333)
+    is ignored.  This delegate operates at the paint level, overriding the
+    palette color roles unconditionally.
+    """
+    _HOVER_BG = QColor("#e8f0fe")
+    _HOVER_FG = QColor("#333")
+    _SEL_BG = QColor("#0984e3")
+    _SEL_FG = Qt.GlobalColor.white
+    _NORMAL_FG = QColor("#333")
+
     def paint(self, painter, option, index):
         opt = QStyleOptionViewItem(option)
-        if opt.state & QStyle.State_MouseOver:
-            opt.palette.setColor(QPalette.HighlightedText, QColor("#333"))
-            opt.palette.setColor(QPalette.Highlight, QColor("#dfe6e9"))
+        state = opt.state
+        hover = bool(state & QStyle.StateFlag.State_MouseOver)
+        selected = bool(state & QStyle.StateFlag.State_Selected)
+
+        if hover and not selected:
+            opt.backgroundBrush = self._HOVER_BG
+            opt.palette.setColor(QPalette.ColorRole.Text, self._HOVER_FG)
+            opt.palette.setColor(QPalette.ColorRole.HighlightedText, self._HOVER_FG)
+            opt.palette.setColor(QPalette.ColorRole.WindowText, self._HOVER_FG)
+        elif selected:
+            opt.backgroundBrush = self._SEL_BG
+            opt.palette.setColor(QPalette.ColorRole.Text, self._SEL_FG)
+            opt.palette.setColor(QPalette.ColorRole.HighlightedText, self._SEL_FG)
+            opt.palette.setColor(QPalette.ColorRole.WindowText, self._SEL_FG)
+        else:
+            opt.palette.setColor(QPalette.ColorRole.Text, self._NORMAL_FG)
+            opt.palette.setColor(QPalette.ColorRole.WindowText, self._NORMAL_FG)
+
+        opt.displayAlignment = Qt.AlignCenter
         super().paint(painter, opt, index)
 
 
@@ -404,8 +432,9 @@ class CreateNetworkDialog(QDialog):
         fl.addRow(btn_row)
 
     def _style_combos(self):
-        arrow_path = os.path.join(os.path.dirname(__file__), "arrow_down.png")
+        arrow_path = os.path.join(os.path.dirname(__file__), "assets", "arrow_down.png")
         if not os.path.exists(arrow_path):
+            os.makedirs(os.path.dirname(arrow_path), exist_ok=True)
             pix = QPixmap(12, 8)
             pix.fill(Qt.GlobalColor.transparent)
             p = QPainter(pix)
@@ -418,29 +447,24 @@ class CreateNetworkDialog(QDialog):
         cs = f"""
             QComboBox {{
                 border: none; border-bottom: 2px solid #dfe6e9;
-                padding: 6px 4px; font-size: 13px; background: #f8f9fa;
+                border-radius: 0; padding: 6px 8px; font-size: 13px;
+                background: transparent;
             }}
-            QComboBox:focus {{ border-bottom: 2px solid #0984e3; }}
-            QComboBox::drop-down {{ border: none; width: 24px; subcontrol-origin: padding; subcontrol-position: top right; }}
-            QComboBox::down-arrow {{ image: url("{arrow_path.replace(chr(92), '/')}"); width: 12px; height: 8px; }}
+            QComboBox:focus {{
+                border-bottom: 2px solid #0984e3;
+            }}
+            QComboBox::drop-down {{
+                subcontrol-origin: padding; subcontrol-position: top right;
+                width: 20px; border: none;
+            }}
+            QComboBox QAbstractItemView {{
+                background: white; color: #1a1a1a;
+                selection-background-color: #e8f0fe; selection-color: #1a1a1a;
+            }}
         """
-        for cb in (self.net_driver, self.net_nic):
-            cb.setStyleSheet(cs)
-            cb.setItemDelegate(_ComboDelegate(cb))
-            v = cb.view()
-            if v:
-                v.setStyleSheet("""
-                    QAbstractItemView {
-                        background: white; color: #333; outline: none;
-                        border: 1px solid #dfe6e9;
-                    }
-                    QAbstractItemView::item {
-                        min-height: 24px; padding: 2px 8px;
-                    }
-                    QAbstractItemView::item:selected {
-                        background: #0984e3; color: white;
-                    }
-                """)
+        self.subnet_combo.setStyleSheet(cs + f"""
+            QComboBox::down-arrow {{ image: url({arrow_path}); }}
+        """)
 
     def _populate_combos(self):
         self.net_nic.clear()
@@ -909,8 +933,9 @@ class CreateContainerDialog(QDialog):
             self._lbl_ip6.setText("IPv6地址")
 
     def _style_combos(self):
-        arrow_path = os.path.join(os.path.dirname(__file__), "arrow_down.png")
+        arrow_path = os.path.join(os.path.dirname(__file__), "assets", "arrow_down.png")
         if not os.path.exists(arrow_path):
+            os.makedirs(os.path.dirname(arrow_path), exist_ok=True)
             pix = QPixmap(12, 8)
             pix.fill(Qt.GlobalColor.transparent)
             p = QPainter(pix)
@@ -931,7 +956,7 @@ class CreateContainerDialog(QDialog):
         """
         for cb in (self.cont_image, self.cont_net, self.cont_restart, self.nic2_net):
             cb.setStyleSheet(cs)
-            cb.setItemDelegate(_ComboDelegate(cb))
+            cb.setItemDelegate(_ComboHoverDelegate(cb))
             v = cb.view()
             if v:
                 v.setStyleSheet("""
@@ -1193,7 +1218,7 @@ class AddNicDialog(QDialog):
         ip_row.addWidget(self.nic_ip)
         ip_row.addWidget(self.nic_ip_warn)
         ip_row.addStretch()
-        fl.addRow(_lbl("指定IPv4"), ip_row)
+        fl.addRow(_req("指定IPv4"), ip_row)
 
         # ── IPv6 ──
         self.nic_ip6_cb = QCheckBox("指定IPv6")
@@ -1236,8 +1261,9 @@ class AddNicDialog(QDialog):
 
     # ── 风格 ──
     def _style_combos(self):
-        arrow_path = os.path.join(os.path.dirname(__file__), "arrow_down.png")
+        arrow_path = os.path.join(os.path.dirname(__file__), "assets", "arrow_down.png")
         if not os.path.exists(arrow_path):
+            os.makedirs(os.path.dirname(arrow_path), exist_ok=True)
             pix = QPixmap(12, 8)
             pix.fill(Qt.GlobalColor.transparent)
             p = QPainter(pix)
@@ -1258,7 +1284,7 @@ class AddNicDialog(QDialog):
         """
         for cb in (self.nic_container, self.nic_network):
             cb.setStyleSheet(cs)
-            cb.setItemDelegate(_ComboDelegate(cb))
+            cb.setItemDelegate(_ComboHoverDelegate(cb))
             v = cb.view()
             if v:
                 v.setStyleSheet("""
@@ -1332,7 +1358,7 @@ class AddNicDialog(QDialog):
             ok = False
         if not self.nic_network.currentText().strip():
             ok = False
-        if self.nic_ip.text().strip() and self.nic_ip_warn.text():
+        if not self.nic_ip.text().strip() or self.nic_ip_warn.text():
             ok = False
         if self.nic_ip6.isEnabled() and (not self.nic_ip6.text().strip() or self.nic_ip6_warn.text()):
             ok = False
@@ -1527,9 +1553,14 @@ class BatchImportDialog(QDialog):
         "network2_name", "ipv4_2", "ipv6_2",
         "network3_name", "ipv4_3", "ipv6_3",
     ]
-    _IPV6_TABLE_COLS = [i + 1 for i, h in enumerate(_HEADERS) if h.startswith("ipv6")]  # +1 for checkbox col
+    _TYPE_MAP = {"普通(无限制)": "1", "普通(限制)": "2", "DB": "3"}
+    _TYPE_REV = {"1": "普通(无限制)", "2": "普通(限制)", "3": "DB"}
+    _RESTART_OPTS = ["always", "no", "on-failure", "unless-stopped"]
+    _CONTAINER_COLS = {_HEADERS.index("container_type") + 1, _HEADERS.index("restart") + 1}
+    _SETTINGS_PATH = os.path.join(os.path.dirname(__file__), "config", "docker_batch_settings.json")
 
-    def __init__(self, parent=None, existing_names=None, existing_ips=None, config_path=None):
+    def __init__(self, parent=None, existing_names=None, existing_ips=None,
+                 existing_networks=None, existing_images=None, config_path=None):
         super().__init__(parent)
         self.setWindowTitle("📋 批量导入容器")
         self.setMinimumSize(1200, 680)
@@ -1537,6 +1568,8 @@ class BatchImportDialog(QDialog):
         self._parsed = []
         self._existing_names = set(existing_names or [])
         self._existing_ips = set(existing_ips or [])
+        self._existing_networks = set(existing_networks or [])
+        self._existing_images = set(existing_images or [])
         self._config_path = config_path or os.path.join(
             os.path.dirname(__file__), "config", "docker_batch_config.json")
         self._updating_table = False
@@ -1551,49 +1584,19 @@ class BatchImportDialog(QDialog):
         tool_row.setSpacing(6)
         add_row_btn = QPushButton("+ 添加行")
         add_row_btn.setStyleSheet(
-            "QPushButton{background:#5b7a9a;color:white;border:none;"
+            "QPushButton{background:#0984e3;color:white;border:none;"
             "border-radius:4px;padding:6px 14px;font-size:12px;}"
-            "QPushButton:hover{background:#4e6b89;}")
+            "QPushButton:hover{background:#0873c4;}")
         add_row_btn.clicked.connect(self._add_row)
         tool_row.addWidget(add_row_btn)
 
         del_row_btn = QPushButton("✕ 删除行")
         del_row_btn.setStyleSheet(
-            "QPushButton{background:#b85450;color:white;border:none;"
+            "QPushButton{background:#d63031;color:white;border:none;"
             "border-radius:4px;padding:6px 14px;font-size:12px;}"
-            "QPushButton:hover{background:#a34945;}")
-        del_row_btn.clicked.connect(self._delete_row)
+            "QPushButton:hover{background:#b3292a;}")
+        del_row_btn.clicked.connect(self._delete_selected_rows)
         tool_row.addWidget(del_row_btn)
-
-        detail_btn = QPushButton("📋 详情")
-        detail_btn.setStyleSheet(
-            "QPushButton{background:#f0f3f5;color:#5b7a9a;border:1px solid #c8d0d8;"
-            "border-radius:4px;padding:6px 14px;font-size:12px;}"
-            "QPushButton:hover{background:#e4e8ec;}")
-        detail_btn.clicked.connect(self._show_selected_detail)
-        tool_row.addWidget(detail_btn)
-
-        copy_btn = QPushButton("📋 复制行")
-        copy_btn.setStyleSheet(
-            "QPushButton{background:#f0f3f5;color:#5b7a9a;border:1px solid #c8d0d8;"
-            "border-radius:4px;padding:6px 14px;font-size:12px;}"
-            "QPushButton:hover{background:#e4e8ec;}")
-        copy_btn.clicked.connect(self._copy_row)
-        tool_row.addWidget(copy_btn)
-
-        paste_btn = QPushButton("📌 粘贴行")
-        paste_btn.setStyleSheet(
-            "QPushButton{background:#f0f3f5;color:#5b7a9a;border:1px solid #c8d0d8;"
-            "border-radius:4px;padding:6px 14px;font-size:12px;}"
-            "QPushButton:hover{background:#e4e8ec;}")
-        paste_btn.clicked.connect(self._paste_row)
-        tool_row.addWidget(paste_btn)
-
-        self.ipv6_cb = QCheckBox("IPv6")
-        self.ipv6_cb.setChecked(True)
-        self.ipv6_cb.toggled.connect(self._toggle_ipv6)
-        self.ipv6_cb.setStyleSheet("font-size:12px; color:#5b7a9a; spacing:4px;")
-        tool_row.addWidget(self.ipv6_cb)
 
         tool_row.addStretch()
 
@@ -1613,6 +1616,18 @@ class BatchImportDialog(QDialog):
         save_btn.clicked.connect(self._save_config)
         tool_row.addWidget(save_btn)
 
+        self.settings_btn = QPushButton("⚙ 列设置")
+        self.settings_btn.setStyleSheet("""
+            QPushButton {
+                background: #f0f3f5; color: #636e72;
+                border: 1px solid #c8d0d8; border-radius: 4px;
+                padding: 4px 12px; font-size: 12px;
+            }
+            QPushButton:hover { background: #e4e8ec; }
+        """)
+        self.settings_btn.setToolTip("列设置")
+        self.settings_btn.clicked.connect(self._show_column_settings)
+
         vl.addLayout(tool_row)
 
         # Volume
@@ -1631,12 +1646,35 @@ class BatchImportDialog(QDialog):
         sep.setStyleSheet("background: #dfe6e9; max-height: 1px;")
         vl.addWidget(sep)
 
-        # Editable table: checkbox + 17 data columns + status column
+        # Table toolbar: ⚙ right-aligned
+        table_toolbar = QHBoxLayout()
+        table_toolbar.setContentsMargins(0, 4, 0, 2)
+        table_toolbar.addStretch()
+        table_toolbar.addWidget(self.settings_btn)
+        vl.addLayout(table_toolbar)
+
+        # Editable table: checkbox + 17 data columns + status + 操作 columns
         self.preview = QTableWidget()
-        all_headers = ["导入"] + list(self._HEADERS) + ["状态"]
+        all_headers = ["导入"] + list(self._HEADERS) + ["状态", "操作"]
         self.preview.setColumnCount(len(all_headers))
         self.preview.setHorizontalHeaderLabels(all_headers)
-        self.preview.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+
+        self.COL_OP = len(all_headers) - 1
+        self.COL_TYPE = self._HEADERS.index("container_type") + 1
+        self.COL_RESTART = self._HEADERS.index("restart") + 1
+        # All columns Interactive (Excel-like drag-to-resize)
+        header = self.preview.horizontalHeader()
+        header.setSectionsMovable(True)
+        self.preview.setColumnWidth(0, 36)
+        header.setSectionResizeMode(0, QHeaderView.Interactive)
+        header.setMinimumSectionSize(32)
+        header.resizeSection(self.COL_TYPE, 130)
+        header.setSectionResizeMode(self.COL_TYPE, QHeaderView.Interactive)
+        header.resizeSection(self.COL_RESTART, 90)
+        header.setSectionResizeMode(self.COL_RESTART, QHeaderView.Interactive)
+        self.preview.setColumnWidth(self.COL_OP, 100)
+        header.setSectionResizeMode(self.COL_OP, QHeaderView.Interactive)
+
         self.preview.setEditTriggers(
             QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
         self.preview.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -1654,9 +1692,9 @@ class BatchImportDialog(QDialog):
         btn_row.addStretch()
         self.import_btn = QPushButton("🚀 开始导入")
         self.import_btn.setStyleSheet("""
-            QPushButton { background: #5b7a9a; color: white; border: none;
+            QPushButton { background: #0984e3; color: white; border: none;
             border-radius: 4px; padding: 8px 20px; font-size: 14px; }
-            QPushButton:disabled { background: #c8d0d8; color: #e8ecf0; }
+            QPushButton:disabled { background: #b2bec3; color: #dfe6e9; }
         """)
         self.import_btn.clicked.connect(self._do_import)
         self.import_btn.setEnabled(False)
@@ -1667,20 +1705,23 @@ class BatchImportDialog(QDialog):
         btn_row.addWidget(cancel_btn)
         vl.addLayout(btn_row)
 
-        # Auto-load config
+        # Auto-load config & column settings
         self._load_config(silent=True)
+        self._load_settings()
 
     # ── Row management ──
 
     def _add_row(self):
         empty = {h: "" for h in self._HEADERS}
+        empty["container_type"] = "1"
+        empty["restart"] = "always"
         empty["_row"] = len(self._parsed) + 1
         empty["_errors"] = []
         self._parsed.append(empty)
         self._update_preview()
         self._update_import_btn()
 
-    def _delete_row(self):
+    def _delete_selected_rows(self):
         rows = sorted(set(
             r.row() for r in self.preview.selectedIndexes()
         ), reverse=True)
@@ -1693,6 +1734,23 @@ class BatchImportDialog(QDialog):
         self._update_preview()
         self._update_import_btn()
 
+    def _delete_row_at(self, row):
+        if 0 <= row < len(self._parsed):
+            self._parsed.pop(row)
+            self._update_preview()
+            self._update_import_btn()
+
+    def _copy_row_at(self, row):
+        if 0 <= row < len(self._parsed):
+            d = self._parsed[row]
+            self._clipboard = {h: d.get(h, "") for h in self._HEADERS}
+            new = {h: self._clipboard.get(h, "") for h in self._HEADERS}
+            new["_row"] = len(self._parsed) + 1
+            new["_errors"] = []
+            self._parsed.insert(row + 1, new)
+            self._update_preview()
+            self._update_import_btn()
+
     def _show_selected_detail(self):
         rows = sorted(set(r.row() for r in self.preview.selectedIndexes()))
         if not rows:
@@ -1700,31 +1758,147 @@ class BatchImportDialog(QDialog):
             return
         self._show_row_detail(rows[0], 0)
 
-    def _copy_row(self):
-        rows = sorted(set(r.row() for r in self.preview.selectedIndexes()))
-        if not rows:
-            QMessageBox.warning(self, "提示", "请先选择一行")
-            return
-        d = self._parsed[rows[0]]
-        self._clipboard = {h: d.get(h, "") for h in self._HEADERS}
-        QMessageBox.information(self, "提示", f"已复制第 {rows[0]+1} 行")
+    # ── Column settings ──
 
-    def _paste_row(self):
-        if not self._clipboard:
-            QMessageBox.warning(self, "提示", "请先复制一行")
-            return
-        rows = sorted(set(r.row() for r in self.preview.selectedIndexes()))
-        insert_after = rows[-1] if rows else len(self._parsed) - 1
-        new = {h: self._clipboard.get(h, "") for h in self._HEADERS}
-        new["_row"] = len(self._parsed) + 1
-        new["_errors"] = []
-        self._parsed.insert(insert_after + 1, new)
-        self._update_preview()
-        self._update_import_btn()
+    def _show_column_settings(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("列设置")
+        dlg.setFixedSize(350, 460)
+        dlg.setStyleSheet("QDialog { background: #fff; }")
+        vl = QVBoxLayout(dlg)
+        vl.setContentsMargins(0, 0, 0, 0)
 
-    def _toggle_ipv6(self, visible):
-        for col in self._IPV6_TABLE_COLS:
+        # Header
+        header = QLabel("显示列设置")
+        header.setStyleSheet("""
+            font-size: 16px; font-weight: bold; color: #2d3436;
+            padding: 16px 20px 8px 20px; background: #fff;
+        """)
+        vl.addWidget(header)
+
+        subtitle = QLabel("勾选需要显示的列，取消勾选隐藏")
+        subtitle.setStyleSheet("color: #b2bec3; font-size: 12px; padding: 0 20px 12px 20px; background: #fff;")
+        vl.addWidget(subtitle)
+
+        # Separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("background: #f1f2f3; max-height: 1px; margin: 0 20px;")
+        vl.addWidget(sep)
+
+        # Checkbox list in scroll area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea { border: none; background: #fff; }")
+        inner = QWidget()
+        inner.setStyleSheet("background: #fff;")
+        chk_layout = QVBoxLayout(inner)
+        chk_layout.setContentsMargins(20, 12, 20, 12)
+        chk_layout.setSpacing(0)
+
+        checkboxes = {}
+        for i, h in enumerate(self._HEADERS):
+            col = i + 1
+            cb = QCheckBox(h)
+            cb.setChecked(not self.preview.isColumnHidden(col))
+            cb.setStyleSheet("""
+                QCheckBox {
+                    spacing: 8px; padding: 6px 4px; font-size: 13px; color: #2d3436;
+                }
+            """)
+            checkboxes[h] = cb
+            chk_layout.addWidget(cb)
+
+        chk_layout.addStretch()
+        scroll.setWidget(inner)
+        vl.addWidget(scroll, 1)
+
+        # Fixed column note
+        note = QLabel("※ 导入 / 状态 / 操作为固定列，不可隐藏")
+        note.setStyleSheet("""
+            color: #b2bec3; font-size: 11px;
+            padding: 4px 20px 8px 20px; background: #fff;
+        """)
+        note.setWordWrap(True)
+        vl.addWidget(note)
+
+        # Button bar
+        btn_bar = QHBoxLayout()
+        btn_bar.setContentsMargins(20, 8, 20, 16)
+        btn_bar.setSpacing(6)
+
+        select_all = QPushButton("全选")
+        select_all.setStyleSheet("""
+            QPushButton {
+                background: #f0f3f5; color: #636e72;
+                border: 1px solid #c8d0d8; border-radius: 4px;
+                padding: 6px 12px; font-size: 12px;
+            }
+            QPushButton:hover { background: #e4e8ec; }
+        """)
+        deselect_all = QPushButton("取消全选")
+        deselect_all.setStyleSheet("""
+            QPushButton {
+                background: #f0f3f5; color: #636e72;
+                border: 1px solid #c8d0d8; border-radius: 4px;
+                padding: 6px 12px; font-size: 12px;
+            }
+            QPushButton:hover { background: #e4e8ec; }
+        """)
+        btn_bar.addWidget(select_all)
+        btn_bar.addWidget(deselect_all)
+        btn_bar.addStretch()
+
+        confirm_btn = QPushButton("确认")
+        confirm_btn.setStyleSheet(STYLE_BTN_PRIMARY)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.setStyleSheet(STYLE_BTN_CANCEL)
+        btn_bar.addWidget(confirm_btn)
+        btn_bar.addWidget(cancel_btn)
+        vl.addLayout(btn_bar)
+
+        def on_confirm():
+            for i, h in enumerate(self._HEADERS):
+                col = i + 1
+                visible = checkboxes[h].isChecked()
+                self.preview.setColumnHidden(col, not visible)
+            self._save_settings()
+            dlg.accept()
+
+        confirm_btn.clicked.connect(on_confirm)
+        cancel_btn.clicked.connect(dlg.reject)
+        select_all.clicked.connect(lambda: [cb.setChecked(True) for cb in checkboxes.values()])
+        deselect_all.clicked.connect(lambda: [cb.setChecked(False) for cb in checkboxes.values()])
+        dlg.exec()
+
+    def _load_settings(self):
+        try:
+            if os.path.exists(self._SETTINGS_PATH):
+                with open(self._SETTINGS_PATH, encoding="utf-8") as f:
+                    data = json.load(f)
+                hidden = set(data.get("hidden_columns", []))
+            else:
+                hidden = set()
+        except:
+            hidden = set()
+        for i, h in enumerate(self._HEADERS):
+            col = i + 1
+            visible = h not in hidden
             self.preview.setColumnHidden(col, not visible)
+
+    def _save_settings(self):
+        hidden = []
+        for i, h in enumerate(self._HEADERS):
+            col = i + 1
+            if self.preview.isColumnHidden(col):
+                hidden.append(h)
+        try:
+            os.makedirs(os.path.dirname(self._SETTINGS_PATH), exist_ok=True)
+            with open(self._SETTINGS_PATH, "w", encoding="utf-8") as f:
+                json.dump({"hidden_columns": hidden}, f, ensure_ascii=False, indent=2)
+        except:
+            pass
 
     # ── Config persistence ──
 
@@ -1745,7 +1919,6 @@ class BatchImportDialog(QDialog):
                 self._parsed.append(d)
             self._validate_all()
             self._update_preview()
-            self._toggle_ipv6(self.ipv6_cb.isChecked())
             self._update_import_btn()
             if not silent:
                 QMessageBox.information(self, "完成", f"已加载 {len(self._parsed)} 条配置")
@@ -1798,6 +1971,8 @@ class BatchImportDialog(QDialog):
 
     def _validate_row(self, d, names_seen=None, ips_seen=None):
         import re as _re
+        _NAME_RE = _re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]+$")
+        _SUBNET_RE = _re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]+$")
         errs = []
         if names_seen is None:
             names_seen = set()
@@ -1808,9 +1983,33 @@ class BatchImportDialog(QDialog):
             if not d.get(field):
                 errs.append(f"{field} 为空")
 
+        hostname = d.get("hostname", "")
+        if hostname and not _NAME_RE.match(hostname):
+            errs.append("hostname 格式错误(字母数字下划线横线)")
+
+        cname = d.get("container_name", "")
+        if cname and not _NAME_RE.match(cname):
+            errs.append("container_name 格式错误(字母数字下划线横线)")
+        if cname and " " in cname:
+            errs.append("container_name 不能有空格")
+        if cname and cname in names_seen:
+            errs.append("container_name 重复")
+        if cname and cname in self._existing_names:
+            errs.append(f"名称 \"{cname}\" 已存在")
+
         ctype = d.get("container_type", "")
         if ctype and ctype not in ("1", "2", "3"):
             errs.append("container_type 无效")
+
+        net1 = d.get("network1_name", "")
+        if net1 and net1 not in self._existing_networks:
+            errs.append(f"network1_name \"{net1}\" 不在现有网络中")
+        if net1 and not _SUBNET_RE.match(net1):
+            errs.append("network1_name 格式错误")
+
+        img = d.get("image_ID", "")
+        if img and img not in self._existing_images:
+            errs.append(f"image_ID \"{img}\" 不存在")
 
         v4 = d.get("ipv4_1", "")
         if v4:
@@ -1822,14 +2021,6 @@ class BatchImportDialog(QDialog):
         if v6:
             if not _re.match(r"^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$", v6):
                 errs.append("ipv6_1 格式错误")
-
-        cname = d.get("container_name", "")
-        if " " in cname:
-            errs.append("container_name 不能有空格")
-        if cname and cname in names_seen:
-            errs.append("container_name 重复")
-        if cname and cname in self._existing_names:
-            errs.append(f"名称 \"{cname}\" 已存在")
 
         all_ips = set()
         for ip_key in ("ipv4_1", "ipv4_2", "ipv4_3"):
@@ -1857,6 +2048,8 @@ class BatchImportDialog(QDialog):
         for suffix in ("2", "3"):
             n = d.get(f"network{suffix}_name", "")
             if n:
+                if n not in self._existing_networks:
+                    errs.append(f"network{suffix}_name \"{n}\" 不在现有网络中")
                 v4x = d.get(f"ipv4_{suffix}", "")
                 if not v4x:
                     errs.append(f"ipv4_{suffix} 为空")
@@ -1877,18 +2070,29 @@ class BatchImportDialog(QDialog):
         self._updating_table = True
         self.preview.setRowCount(len(self._parsed))
         for i, d in enumerate(self._parsed):
-            # Checkbox column
-            chk = QTableWidgetItem()
-            chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            chk.setCheckState(Qt.Checked)
-            self.preview.setItem(i, 0, chk)
+            # Checkbox column — use setCellWidget for proper centering
+            chk_container = QWidget()
+            chk_layout = QHBoxLayout(chk_container)
+            chk_layout.setContentsMargins(0, 0, 0, 0)
+            chk = QCheckBox()
+            chk.setChecked(True)
+            chk_layout.addWidget(chk, 0, Qt.AlignCenter)
+            self.preview.setCellWidget(i, 0, chk_container)
             # Data columns
             for j, h in enumerate(self._HEADERS):
+                if h == "container_type":
+                    self.preview.setCellWidget(i, j + 1, self._make_type_combo(i, d.get(h, "")))
+                    continue
+                if h == "restart":
+                    self.preview.setCellWidget(i, j + 1, self._make_restart_combo(i, d.get(h, "")))
+                    continue
                 val = d.get(h, "")
                 item = QTableWidgetItem(val)
+                item.setTextAlignment(Qt.AlignCenter)
                 item.setToolTip(val)
                 self.preview.setItem(i, j + 1, item)
             self._update_status_cell(i, d)
+            self.preview.setCellWidget(i, self.COL_OP, self._make_row_buttons(i))
         self._updating_table = False
 
     def _update_status_cell(self, row, d):
@@ -1903,11 +2107,88 @@ class BatchImportDialog(QDialog):
             item.setBackground(QColor("#e8f5e9"))
         self.preview.setItem(row, status_col, item)
 
+    def _make_row_buttons(self, row):
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(2, 0, 2, 0)
+        layout.setSpacing(2)
+
+        detail_btn = QPushButton("详情")
+        detail_btn.setFixedHeight(22)
+        detail_btn.setStyleSheet(
+            "QPushButton{background:#e8f0fe;color:#0984e3;border:none;"
+            "border-radius:3px;padding:0 6px;font-size:11px;}"
+            "QPushButton:hover{background:#d0e2fc;}")
+        detail_btn.clicked.connect(lambda checked, r=row: self._show_row_detail(r, 0))
+        layout.addWidget(detail_btn)
+
+        copy_btn = QPushButton("复制")
+        copy_btn.setFixedHeight(22)
+        copy_btn.setStyleSheet(
+            "QPushButton{background:#e8f0fe;color:#0984e3;border:none;"
+            "border-radius:3px;padding:0 6px;font-size:11px;}"
+            "QPushButton:hover{background:#d0e2fc;}")
+        copy_btn.clicked.connect(lambda checked, r=row: self._copy_row_at(r))
+        layout.addWidget(copy_btn)
+
+        del_btn = QPushButton("✕")
+        del_btn.setFixedSize(22, 22)
+        del_btn.setStyleSheet(
+            "QPushButton{background:transparent;color:#d63031;border:none;"
+            "border-radius:3px;font-size:12px;font-weight:bold;}"
+            "QPushButton:hover{background:#fce4e4;}")
+        del_btn.clicked.connect(lambda checked, r=row: self._delete_row_at(r))
+        layout.addWidget(del_btn)
+
+        return container
+
+    def _sync_combo(self, row, header, value):
+        if self._updating_table or row >= len(self._parsed):
+            return
+        self._parsed[row][header] = value
+        self._validate_row(self._parsed[row])
+        self._update_status_cell(row, self._parsed[row])
+        self._update_import_btn()
+
+    def _make_type_combo(self, row, current_val):
+        cb = QComboBox()
+        cb.addItems(list(self._TYPE_MAP.keys()))
+        display = self._TYPE_REV.get(current_val, "普通(无限制)")
+        cb.setCurrentText(display)
+        le = QLineEdit()
+        le.setReadOnly(True)
+        le.setAlignment(Qt.AlignCenter)
+        le.setStyleSheet("QLineEdit{border:none;background:transparent;margin:0;padding:0;font-size:12px;}")
+        cb.setLineEdit(le)
+        cb.setStyleSheet("QComboBox{border:none;background:transparent;font-size:12px;}"
+                         "QComboBox::drop-down{width:18px;}")
+        cb.view().setItemDelegate(_ComboHoverDelegate(cb.view()))
+        cb.currentTextChanged.connect(
+            lambda txt, r=row: self._sync_combo(r, "container_type", self._TYPE_MAP.get(txt, "1")))
+        return cb
+
+    def _make_restart_combo(self, row, current_val):
+        cb = QComboBox()
+        cb.addItems(self._RESTART_OPTS)
+        cb.setCurrentText(current_val if current_val in self._RESTART_OPTS else "always")
+        le = QLineEdit()
+        le.setReadOnly(True)
+        le.setAlignment(Qt.AlignCenter)
+        le.setStyleSheet("QLineEdit{border:none;background:transparent;margin:0;padding:0;font-size:12px;}")
+        cb.setLineEdit(le)
+        cb.setStyleSheet("QComboBox{border:none;background:transparent;font-size:12px;}"
+                         "QComboBox::drop-down{width:18px;}")
+        cb.view().setItemDelegate(_ComboHoverDelegate(cb.view()))
+        cb.currentTextChanged.connect(
+            lambda txt, r=row: self._sync_combo(r, "restart", txt))
+        return cb
+
     def _update_import_btn(self):
         has_any = False
         for i, d in enumerate(self._parsed):
-            item = self.preview.item(i, 0)
-            if item and item.checkState() == Qt.Checked and not d.get("_errors", []):
+            w = self.preview.cellWidget(i, 0)
+            cb = w.findChild(QCheckBox) if w else None
+            if cb and cb.isChecked() and not d.get("_errors", []):
                 has_any = True
                 break
         self.import_btn.setEnabled(has_any)
@@ -1917,15 +2198,102 @@ class BatchImportDialog(QDialog):
             return
         d = self._parsed[row]
         errs = d.get("_errors", [])
-        lines = [f"第 {row+1} 行:"]
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"第 {row+1} 行详情")
+        dlg.setFixedSize(420, 500)
+        dlg.setStyleSheet("""
+            QDialog { background: #fff; }
+        """)
+        vl = QVBoxLayout(dlg)
+        vl.setContentsMargins(0, 0, 0, 0)
+
+        # Scroll area with padding
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea { border: none; background: #fff; }")
+        inner = QWidget()
+        inner.setStyleSheet("background: #fff;")
+        form = QVBoxLayout(inner)
+        form.setContentsMargins(20, 16, 20, 16)
+        form.setSpacing(2)
+
+        # Header
+        has_err = bool(errs)
+        status_color = "#d63031" if has_err else "#27ae60"
+        status_bg = "#fce4e4" if has_err else "#e8f5e9"
+        status_text = "❌ 存在错误" if has_err else "✅ 验证通过"
+        header = QLabel(f"第 {row+1} 行")
+        header.setStyleSheet("""
+            font-size: 16px; font-weight: bold; color: #2d3436;
+            padding: 8px 0 2px 0;
+        """)
+        form.addWidget(header)
+
+        badge = QLabel(status_text)
+        badge.setStyleSheet(f"""
+            background: {status_bg}; color: {status_color};
+            font-size: 12px; font-weight: bold; padding: 4px 12px;
+            border-radius: 4px; margin: 4px 0 12px 0;
+        """)
+        form.addWidget(badge)
+
+        # Field grid
+        field_names = {
+            "hostname": "主机名", "container_name": "容器名称",
+            "container_type": "容器类型", "restart": "重启策略",
+            "image_ID": "镜像", "network1_name": "网络1",
+            "ipv4_1": "IPv4", "ipv6_1": "IPv6",
+            "network2_name": "网络2", "ipv4_2": "IPv4(2)", "ipv6_2": "IPv6(2)",
+            "network3_name": "网络3", "ipv4_3": "IPv4(3)", "ipv6_3": "IPv6(3)",
+            "cpu": "CPU", "memory": "内存(MB)", "shm_size": "SHM(MB)",
+        }
         for h in self._HEADERS:
-            lines.append(f"  {h}: {d.get(h, '')}")
+            label = field_names.get(h, h)
+            val = d.get(h, "")
+            row_box = QHBoxLayout()
+            row_box.setContentsMargins(0, 2, 0, 2)
+            lbl = QLabel(label)
+            lbl.setFixedWidth(100)
+            lbl.setStyleSheet("color: #636e72; font-size: 13px;")
+            row_box.addWidget(lbl)
+            v = QLabel(val if val else "—")
+            v.setStyleSheet("color: #2d3436; font-size: 13px; font-weight: 500;")
+            v.setWordWrap(True)
+            row_box.addWidget(v, 1)
+            form.addLayout(row_box)
+
+        # Errors section
         if errs:
-            lines.append("")
-            lines.append("错误:")
+            form.addSpacing(8)
+            err_header = QLabel("错误详情")
+            err_header.setStyleSheet("""
+                font-size: 14px; font-weight: bold; color: #d63031;
+                padding: 8px 0 4px 0;
+            """)
+            form.addWidget(err_header)
             for e in errs:
-                lines.append(f"  ❌ {e}")
-        QMessageBox.information(self, "行详情", "\n".join(lines))
+                e_lbl = QLabel(f"• {e}")
+                e_lbl.setStyleSheet("color: #d63031; font-size: 12px; padding: 2px 0 2px 12px;")
+                e_lbl.setWordWrap(True)
+                form.addWidget(e_lbl)
+
+        form.addStretch()
+        scroll.setWidget(inner)
+        vl.addWidget(scroll, 1)
+
+        # Close button
+        btn_bar = QHBoxLayout()
+        btn_bar.setContentsMargins(20, 8, 20, 12)
+        close_btn = QPushButton("关闭")
+        close_btn.setStyleSheet(STYLE_BTN_CANCEL)
+        close_btn.clicked.connect(dlg.accept)
+        btn_bar.addStretch()
+        btn_bar.addWidget(close_btn)
+        vl.addLayout(btn_bar)
+
+        dlg.exec()
 
     # ── Command generation & import ──
 
@@ -1990,8 +2358,9 @@ class BatchImportDialog(QDialog):
             return
         valid = []
         for i, d in enumerate(self._parsed):
-            item = self.preview.item(i, 0)
-            if item and item.checkState() == Qt.Checked and not d.get("_errors", []):
+            w = self.preview.cellWidget(i, 0)
+            cb = w.findChild(QCheckBox) if w else None
+            if cb and cb.isChecked() and not d.get("_errors", []):
                 valid.append(d)
         if not valid:
             QMessageBox.warning(self, "提示", "没有勾选的有效数据可导入")
@@ -2576,28 +2945,50 @@ class DockerManager(QWidget):
 
         self.host_combo = QComboBox()
         self.host_combo.setMinimumWidth(280)
-        self.host_combo.setStyleSheet(
-            STYLE_INPUT_FLAT + "\n"
-            "QComboBox QAbstractItemView {"
-            "  background: white; color: #1a1a1a; selection-background-color: #e8f0fe; selection-color: #1a1a1a;"
-            "}")
+        self.host_combo.setFixedHeight(34)
+        self.host_combo.setStyleSheet("""
+            QComboBox {
+                border: 1px solid #dfe6e9; border-radius: 4px;
+                padding: 0 28px 0 12px; font-size: 13px;
+                background: white; color: #2d3436;
+            }
+            QComboBox:focus, QComboBox:hover {
+                border: 1px solid #0984e3;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding; subcontrol-position: top right;
+                width: 26px; border-left: 1px solid #dfe6e9;
+                border-top-right-radius: 4px; border-bottom-right-radius: 4px;
+            }
+            QComboBox QAbstractItemView {
+                background: white; color: #1a1a1a;
+                selection-background-color: #e8f0fe; selection-color: #1a1a1a;
+                outline: none;
+            }
+        """)
         self._refresh_host_combo()
         layout.addWidget(self.host_combo)
 
         manage_btn = QPushButton("管理")
-        manage_btn.setStyleSheet(
-            "QPushButton{background:#f8f9fa;color:#636e72;border:1px solid #dfe6e9;"
-            "border-radius:4px;padding:6px 12px;font-size:12px;}"
-            "QPushButton:hover{background:#e8e8e8;}")
+        manage_btn.setFixedHeight(34)
+        manage_btn.setStyleSheet("""
+            QPushButton {
+                background: white; color: #0984e3; border: 1px solid #0984e3;
+                border-radius: 4px; padding: 0 16px; font-size: 13px;
+            }
+            QPushButton:hover { background: #e8f0fe; }
+        """)
         manage_btn.clicked.connect(self._manage_hosts)
         layout.addWidget(manage_btn)
 
         self.connect_btn = QPushButton("连接")
+        self.connect_btn.setFixedHeight(34)
         self.connect_btn.setStyleSheet(STYLE_BTN_PRIMARY)
         self.connect_btn.clicked.connect(self._toggle_connection)
         layout.addWidget(self.connect_btn)
 
         self.refresh_btn = QPushButton("刷新")
+        self.refresh_btn.setFixedHeight(34)
         self.refresh_btn.setStyleSheet(STYLE_BTN_SUCCESS)
         self.refresh_btn.clicked.connect(self._refresh_data)
         self.refresh_btn.setEnabled(False)
@@ -2824,7 +3215,7 @@ class DockerManager(QWidget):
         svc_ly.setSpacing(4)
         svc_ly.addWidget(QLabel("⚙ Docker服务:"))
         self.service_buttons = []
-        for text, bg, hover, action in [("▶ 启动","#5d8a6a","#4f7a5d","start"),("⏹ 停止","#b85450","#a34945","stop"),("🔄 重启","#c8913a","#b07d33","restart")]:
+        for text, bg, hover, action in [("▶ 启动","#27ae60","#1e914f","start"),("⏹ 停止","#d63031","#b3292a","stop"),("🔄 重启","#f39c12","#d4860e","restart")]:
             btn = QPushButton(text)
             btn.setStyleSheet(f"{STYLE_BTN_CTRL} QPushButton {{ background: {bg}; }} QPushButton:hover {{ background: {hover}; }}")
             btn.clicked.connect(lambda checked, a=action: self._service_action(a))
@@ -2839,7 +3230,7 @@ class DockerManager(QWidget):
         boot_ly.setContentsMargins(10, 4, 10, 4)
         boot_ly.setSpacing(4)
         boot_ly.addWidget(QLabel("🔄 Docker服务开机自启:"))
-        for text, bg, hover, action in [("✓ 启用","#5b7a9a","#4e6b89","enable"),("✕ 禁用","#6b7a7f","#556168","disable")]:
+        for text, bg, hover, action in [("✓ 启用","#0984e3","#0873c4","enable"),("✕ 禁用","#6b7a7f","#556168","disable")]:
             btn = QPushButton(text)
             btn.setStyleSheet(f"{STYLE_BTN_CTRL} QPushButton {{ background: {bg}; }} QPushButton:hover {{ background: {hover}; }}")
             btn.clicked.connect(lambda checked, a=action: self._service_action(a))
@@ -2874,21 +3265,20 @@ class DockerManager(QWidget):
         cl.setSpacing(4)
         ADD_STYLE = """
             QPushButton {
-                background: #5b7a9a; color: white;
+                background: #0984e3; color: white;
                 border: none; border-radius: 3px;
                 padding: 3px 12px; font-size: 11px;
             }
-            QPushButton:hover { background: #4e6b89; }
-            QPushButton:disabled { background: #c8d0d8; }
+            QPushButton:hover { background: #0873c4; }
+            QPushButton:disabled { background: #b2bec3; color: #dfe6e9; }
         """
         DEL_STYLE = """
             QPushButton {
-                background: transparent; color: #b85450;
-                border: 1px solid #b85450; border-radius: 3px;
+                background: transparent; color: #d63031;
+                border: 1px solid #d63031; border-radius: 3px;
                 padding: 2px 10px; font-size: 11px;
             }
-            QPushButton:hover { background: #b85450; color: white; }
-            QPushButton:disabled { color: #c8d0d8; border-color: #c8d0d8; }
+            QPushButton:hover { background: #d63031; color: white; }
         """
         self.cont_create_btn = QPushButton("+ 创建容器")
         self.cont_create_btn.setFixedHeight(24)
@@ -3258,9 +3648,13 @@ class DockerManager(QWidget):
         existing_ips = set()
         for ips in ip_map.values():
             existing_ips.update(ips)
+        existing_networks = {n["name"] for n in self.docker_data.get("networks", [])}
+        existing_images = {img.get("id", "") for img in self.docker_data.get("images", []) if img.get("id")}
         dlg = BatchImportDialog(self,
             existing_names=existing_names,
             existing_ips=list(existing_ips),
+            existing_networks=existing_networks,
+            existing_images=existing_images,
             config_path=self._hosts_file.replace("docker_hosts.json", "docker_batch_config.json"),
         )
         if dlg.exec() == QDialog.Accepted:
@@ -3658,3 +4052,4 @@ if __name__ == "__main__":
     w = DockerManager()
     w.show()
     sys.exit(app.exec())
+

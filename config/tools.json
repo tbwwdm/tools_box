@@ -57,6 +57,20 @@
       "icon": "🌐"
     },
     {
+      "name": "远程抓包",
+      "description": "远程tcpdump抓包，支持定时/手动模式，协议/IP/端口过滤，自动压缩下载",
+      "module": "Tcpdump_Capture_sub",
+      "class": "TcpdumpCapture",
+      "icon": "📡"
+    },
+    {
+      "name": "Docker自动化",
+      "description": "远程Docker管理，容器创建/删除/导入/导出，镜像管理，网络管理，批量操作",
+      "module": "Linux_Docker_Tool_sub",
+      "class": "DockerManager",
+      "icon": "🐳"
+    },
+    {
       "name": "IMS网元升级",
       "description": "IMS系统网元升级工具，支持MGCF/CCF/SCP等网元的停止、备份、上传补丁、解压、配置对比、License恢复、启动等完整升级流程。\n使用说明：\n  1.输入SSH连接信息连接目标主机\n  2.选择网元类型（MGCF/CCF等）\n  3.选择本地补丁文件（tar.gz）\n  4.点击开始升级，程序将按步骤自动执行\n  5.配置文件差异时会弹出对比窗口供用户选择",
       "module": "IMS_NE_Upgrade_sub",
