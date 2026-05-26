@@ -194,6 +194,9 @@ def _format_size(sz):
         sz /= 1024
     return f"{sz:.1f}TB"
 
+def _shell_quote(value):
+    return "'" + str(value).replace("'", "'\"'\"'") + "'"
+
 # ═══════════════════════════════════════════════
 #  IMSTool - Combined Tool
 # ═══════════════════════════════════════════════
@@ -206,6 +209,15 @@ class IMSTool(QWidget):
         self._upgrading = False
         self._log_view_active = False
         self._timer_workers = []
+        self._manual_workers = []
+        self._stop_workers = []
+        self._cleanup_workers = []
+        self._up_worker = None
+        self._ne_service_worker = None
+        self._log_worker = None
+        self._log_browse_worker = None
+        self._log_tail_worker = None
+        self._log_dl_worker = None
         self._active_remote_paths = []
         self._init_ui()
 
@@ -303,6 +315,11 @@ class IMSTool(QWidget):
         self.log_box.append(f"[{ts}] {msg}")
 
     def closeEvent(self, event):
+        self._log_stop_tail()
+        if self._up_worker and self._up_worker.isRunning():
+            self._up_worker.stop()
+        if self._ne_service_worker and self._ne_service_worker.isRunning():
+            self._ne_service_worker.stop()
         self._emergency_cleanup()
         event.accept()
 
@@ -321,7 +338,10 @@ class IMSTool(QWidget):
                 by_host.setdefault(key, []).append(rpath)
             for (host, port, user, pwd), paths in by_host.items():
                 names = [p.split("/")[-1] for p in paths]
-                KillWorker(host, port, user, pwd, names).start()
+                w = KillWorker(host, port, user, pwd, names)
+                self._cleanup_workers.append(w)
+                w.finished.connect(lambda worker=w: self._cleanup_workers.remove(worker) if worker in self._cleanup_workers else None)
+                w.start()
 
     # ═══════════════════════════════════════════════
     #  Host Management
@@ -655,6 +675,21 @@ class IMSTool(QWidget):
         hosts = self._selected_hosts()
         return hosts[0] if hosts else None
 
+    def _forget_remote_capture(self, worker):
+        if not worker:
+            return
+        remote_path = getattr(worker, "remote_path", None)
+        if not remote_path:
+            return
+        key = (worker.host, worker.port, worker.user, worker.pwd)
+        for item in list(self._active_remote_paths):
+            item_key, item_path = item
+            same_host = item_key[0] == key[0] and str(item_key[1]) == str(key[1])
+            same_auth = item_key[2:] == key[2:]
+            if same_host and same_auth and item_path == remote_path:
+                self._active_remote_paths.remove(item)
+                break
+
     # ═══════════════════════════════════════════════
     #  Tab 1: 抓包 (Packet Capture)
     # ═══════════════════════════════════════════════
@@ -892,14 +927,22 @@ class IMSTool(QWidget):
         save_dir = self.cap_save_path.text().strip()
         if not save_dir:
             QMessageBox.warning(self, "Warning", "Select save directory"); return
+        os.makedirs(save_dir, exist_ok=True)
         raw_dur = self.cap_duration.text().strip() or "30"
-        duration = str(int(raw_dur) * 60) if self.cap_dur_unit.currentText() == "min" else raw_dur
+        try:
+            duration_int = int(raw_dur) * 60 if self.cap_dur_unit.currentText() == "min" else int(raw_dur)
+        except ValueError:
+            QMessageBox.warning(self, "Warning", "Duration must be a positive integer"); return
+        if duration_int <= 0:
+            QMessageBox.warning(self, "Warning", "Duration must be greater than 0"); return
+        duration = str(duration_int)
         if self._timer_workers:
             for w in self._timer_workers:
                 if w.isRunning(): w.terminate()
             self._timer_workers = []
         self._capturing = True; self._capture_counts = len(tasks)
         self._capture_done = 0; self._capture_errors = 0; self._capture_results = []
+        self._multi_completed = False
         self.cap_mode_cb.setEnabled(False); self.cap_start_btn.setEnabled(False)
         self.progress_bar.setVisible(True); self.progress_bar.setValue(0)
         for ti, (ttype, h, expr, oname) in enumerate(tasks):
@@ -919,7 +962,7 @@ class IMSTool(QWidget):
             w.done.connect(self._on_multi_done)
             w.error.connect(self._on_multi_error)
             w.finished.connect(self._on_multi_finished)
-            w.start(); self._timer_workers.append(w)
+            self._timer_workers.append(w); w.start()
 
     def _do_cap_manual_start(self):
         tasks = []
@@ -941,6 +984,7 @@ class IMSTool(QWidget):
         save_dir = self.cap_save_path.text().strip()
         if not save_dir:
             QMessageBox.warning(self, "Warning", "Select save directory"); return
+        os.makedirs(save_dir, exist_ok=True)
         self._manual_workers = []; self._manual_errors = 0; self._manual_started_count = 0
         self._capturing = True; self.cap_mode_cb.setEnabled(False); self.cap_start_btn.setEnabled(False); self.cap_stop_btn.setEnabled(True)
         for ttype, h, expr, oname in tasks:
@@ -949,7 +993,6 @@ class IMSTool(QWidget):
                 self._log(f"[manual] SBCM {h['host']} → {oname}")
                 w = SBCMCaptureWorker(h["host"], h.get("port",22), h["user"], h.get("pwd",""), lp, duration=None)
                 w.log.connect(self._log); w.done.connect(self._on_manual_stopped); w.error.connect(self._on_manual_error)
-                w.start()
             else:
                 rp = f"/opt/tar/{oname}"
                 self._active_remote_paths.append(((h['host'],h.get('port',22),h['user'],h.get('pwd','')), rp))
@@ -965,6 +1008,7 @@ class IMSTool(QWidget):
         if not self._manual_workers: return
         self.cap_stop_btn.setEnabled(False); self.cap_start_btn.setEnabled(False)
         self._stop_workers = []; self._stop_done = 0; self._stop_errors = 0; self._stop_results = []
+        self._stop_completed = False
         for w in self._manual_workers:
             if isinstance(w, SBCMCaptureWorker):
                 self._log(f"[manual] Stopping SBCM capture")
@@ -977,7 +1021,7 @@ class IMSTool(QWidget):
                 sw = CaptureStopWorker(w.host, w.port, w.user, w.pwd, w._remote_path, w._local_path, self.cap_compress_cb.isChecked())
                 sw.log.connect(self._log); sw.done.connect(self._on_manual_stopped)
                 sw.error.connect(self._on_manual_stop_error); sw.finished.connect(self._on_stop_finished)
-                sw.start(); self._stop_workers.append(sw)
+                self._stop_workers.append(sw); sw.start()
 
     def _on_manual_started(self): self._manual_started_count += 1
     def _on_manual_error(self, msg):
@@ -989,6 +1033,7 @@ class IMSTool(QWidget):
     def _on_manual_stop_error(self, msg):
         self._stop_errors += 1; self._log(f"[error] {msg}")
     def _on_stop_finished(self):
+        self._forget_remote_capture(self.sender())
         if self._stop_done + self._stop_errors >= len(self._stop_workers) and not getattr(self, '_stop_completed', False):
             self._stop_completed = True
             self._capturing = False; self.cap_mode_cb.setEnabled(True); self.cap_start_btn.setEnabled(True); self.cap_stop_btn.setEnabled(False)
@@ -1003,9 +1048,10 @@ class IMSTool(QWidget):
     def _on_multi_error(self, msg):
         self._capture_errors += 1; self._log(f"[error] {msg}")
     def _on_multi_finished(self):
+        self._forget_remote_capture(self.sender())
         if self._capture_done + self._capture_errors >= self._capture_counts and not getattr(self, '_multi_completed', False):
             self._multi_completed = True
-            self._capturing = False; self.cap_mode_cb.setEnabled(True); self.progress_bar.setVisible(False)
+            self._capturing = False; self.cap_mode_cb.setEnabled(True); self.cap_start_btn.setEnabled(True); self.progress_bar.setVisible(False)
             if self._capture_results: self._show_cap_done(self._capture_results)
             self._timer_workers = []
     def _show_cap_done(self, paths):
@@ -1136,7 +1182,8 @@ class IMSTool(QWidget):
     def _stop_upgrade(self):
         if self._up_worker:
             self._up_worker.stop()
-            self._up_worker = None
+            self.up_stop_btn.setEnabled(False)
+            self._log("[upgrade] Stop requested")
 
     def _do_ne_stop(self):
         self._do_ne_service("stop")
@@ -1189,6 +1236,7 @@ class IMSTool(QWidget):
                 if "⏳" in lbl.text():
                     lbl.setText(lbl.text().replace("⏳","✅"))
         self._log(f"[upgrade] Finished: {status}")
+        self._up_worker = None
 
     def _on_up_config_diff(self, diff_items):
         dlg = ConfigDiffDialog(diff_items, self)
@@ -1541,8 +1589,8 @@ class KillWorker(QThread):
             c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             c.connect(self.host, self.port, self.user, self.pwd, timeout=5)
             for name in self.out_names:
-                c.exec_command(f"ps aux | grep 'tcpdump.*{name}' | grep -v grep | awk '{{print $2}}' | xargs -r kill 2>/dev/null")
-            c.exec_command("pgrep -f 'tcpdump -i any -w /opt/tar/' | xargs -r kill 2>/dev/null; sleep 1")
+                c.exec_command(f"pkill -f {_shell_quote('tcpdump .*' + name)} 2>/dev/null || true")
+            c.exec_command("sleep 1")
             c.close()
         except: pass
 
@@ -1565,7 +1613,7 @@ class CaptureWorker(QThread):
             for i in range(self.duration):
                 time.sleep(1); self.progress.emit(int((i+1)*100/self.duration))
             self.log.emit("[tcpdump] Stopping capture")
-            self._ssh_exec("killall tcpdump 2>/dev/null; pkill tcpdump 2>/dev/null; pgrep tcpdump | xargs -r kill 2>/dev/null; sleep 2")
+            self._ssh_exec(f"pkill -f {_shell_quote('tcpdump .* -w ' + self.remote_path)} 2>/dev/null || true; sleep 2")
             out, _ = self._ssh_exec(f"test -f {self.remote_path} && echo OK || echo MISSING")
             if out != "OK":
                 raise RuntimeError(f"File not found: {self.remote_path}")
@@ -1619,7 +1667,7 @@ class CaptureStopWorker(QThread):
         try:
             self.log.emit("[tcpdump] Stopping capture")
             c = self._ssh(); chan = c.get_transport().open_session()
-            chan.exec_command("killall tcpdump 2>/dev/null; pkill tcpdump 2>/dev/null; pgrep tcpdump | xargs -r kill 2>/dev/null; sleep 2")
+            chan.exec_command(f"pkill -f {_shell_quote('tcpdump .* -w ' + self.remote_path)} 2>/dev/null || true; sleep 2")
             chan.close(); c.close()
             c = self._ssh(); chan = c.get_transport().open_session()
             chan.exec_command(f"test -f {self.remote_path} && echo OK || echo MISSING")
