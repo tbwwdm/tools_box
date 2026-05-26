@@ -1060,6 +1060,8 @@ class MainWindow(QMainWindow):
 
     def _switch_tab(self, index: int):
         self.stack.setCurrentIndex(index)
+        if index == 1:
+            self._on_repo_source_changed()
 
     # ----------------------------------------------------------
     #  页面构建 — 服务器配置（左1/4 + 右3/4）
@@ -2134,6 +2136,9 @@ class MainWindow(QMainWindow):
         self.executor.step.connect(self._log)
         self.executor.finished_signal.connect(self._on_exec_finished)
 
+        # 初始化客户端页面状态（setChecked 触发时信号还没连上，这里补一次）
+        self._on_repo_source_changed()
+
     # ----------------------------------------------------------
     #  客户端 — Repo 来源切换
     # ----------------------------------------------------------
@@ -2153,10 +2158,13 @@ class MainWindow(QMainWindow):
             self._update_client_action_buttons()
 
     def _refresh_repo_server_list(self):
-        # 清除旧的单选按钮
+        # 清除所有旧控件（单选按钮 + 提示标签）
         for rb in self._repo_radio_group.buttons():
             self._repo_radio_group.removeButton(rb)
-            rb.deleteLater()
+        while self.repo_server_layout.count() > 1:  # 保留最后的 stretch
+            item = self.repo_server_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
         self._repo_radio_map.clear()
 
         if self.ssh_manager.connected:
@@ -3236,7 +3244,7 @@ def run_cli_mode(args, ssh_manager: SSHManager = None):
 
     return 1
 
-
+#
 # ============================================================
 #  入口
 # ============================================================
