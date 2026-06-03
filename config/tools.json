@@ -22,6 +22,13 @@
       "icon": "🔑"
     },
     {
+      "name": "PDF工具集",
+      "description": "PDF处理工具：支持PDF合并、拆分、A4多页拼版，支持文件拖拽输入。",
+      "module": "PDF_Tool_sub",
+      "class": "PDFToolBox",
+      "icon": "📄"
+    },
+    {
       "name": "网段Ping扫描器",
       "description": "批量Ping扫描IP网段，可视化网格显示通断状态，支持两轮重试机制",
       "module": "Ping_Scanner_sub",
