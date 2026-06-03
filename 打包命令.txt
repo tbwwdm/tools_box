@@ -1,0 +1,17 @@
+$all_modules = Get-ChildItem -Filter "*.py" | Where-Object { $_.Name -ne "Toolbox_Main.py" } | ForEach-Object { "--include-module=" + $_.BaseName }
+python -m nuitka Toolbox_Main.py `
+    --standalone `
+    --msvc=latest `
+    --enable-plugin=pyside6 `
+    --windows-console-mode=hide `
+    --follow-imports `
+    --assume-yes-for-downloads `
+    --remove-output `
+    --company-name="Genew" `
+    --product-name="Toolbox" `
+    --file-version=1.0.0 `
+    --product-version=1.0.0 `
+    --jobs=8 `
+    --include-data-dir=input=input `
+    --include-data-dir=config=config `
+    $all_modules

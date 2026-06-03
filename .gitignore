@@ -185,4 +185,6 @@ Toolbox_Main.build/
 Toolbox_Main.dist/
 build/
 *.spec
-
+打包命令.txt/
+打包命令.txt
+*.md

@@ -8,25 +8,11 @@
       "icon": "🕐"
     },
     {
-      "name": "批量用户管理",
-      "description": "批量创建、删除Linux系统用户，支持sudo权限配置，支持密码确认校验",
-      "module": "Linux_Add_User_sub",
-      "class": "UserManageGUI",
-      "icon": "👤"
-    },
-    {
-      "name": "SSH端口配置",
-      "description": "批量修改Linux服务器SSH端口、禁止root远程登录等sshd配置项",
-      "module": "Linux_Change_SSH_Port_sub",
-      "class": "SSHPortGUI",
-      "icon": "🔐"
-    },
-    {
-      "name": "安全基线检查",
-      "description": "批量检查Linux服务器的安全基线配置，包括密码策略、日志配置、权限控制、FTP设置等",
-      "module": "Linux_Security_Check_sub",
-      "class": "SecurityCheckApp",
-      "icon": "🛡"
+      "name": "Linux工具集",
+      "description": "Linux服务器管理工具集：用户管理（新增/删除）、SSH配置（端口/root登录）、登录测试、用户列表获取、安全基线检查",
+      "module": "Linux_Tools_sub",
+      "class": "LinuxToolsGUI",
+      "icon": "💻"
     },
     {
       "name": "密码生成器",
@@ -34,20 +20,6 @@
       "module": "Tool_Passwd_Creat_sub",
       "class": "PasswdTool",
       "icon": "🔑"
-    },
-    {
-      "name": "SSH登录测试",
-      "description": "批量测试SSH服务器登录是否正常，支持固定账号或逐行账号测试",
-      "module": "Linux_SSH_LoginTest_sub",
-      "class": "SSHTester",
-      "icon": "🔍"
-    },
-    {
-      "name": "获取用户列表",
-      "description": "批量获取Linux服务器上的可登录用户列表，结果写入Excel",
-      "module": "Linux_Get_UserList_sub",
-      "class": "UserListFetcher",
-      "icon": "📋"
     },
     {
       "name": "网段Ping扫描器",
