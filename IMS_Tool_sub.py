@@ -346,14 +346,15 @@ class IMSTool(QWidget):
         self.log_box = QTextEdit()
         self.log_box.setReadOnly(True)
         self.log_box.setFont(QFont("Consolas", 10))
-        self.log_box.setMinimumHeight(80)
+        self.log_box.setMinimumHeight(260)
         self.log_box.setStyleSheet("QTextEdit{background:#fafafa;border:1px solid #e0e0e0;border-radius:8px;padding:8px;font-size:11px;}")
         bl.addWidget(self.log_box)
         self._splitter.addWidget(bottom_panel)
-        self._splitter.setSizes([600, 180])
+        self._splitter.setSizes([245, 625])
 
         # ── Tab change: toggle filter visibility ──
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.tabs.setMaximumHeight(245)
 
         layout.addWidget(self._splitter, 1)
 
@@ -367,6 +368,12 @@ class IMSTool(QWidget):
         for r in self._host_rows:
             if 'filter_section' in r:
                 r['filter_section'].setVisible(show)
+        if show:
+            self.tabs.setMaximumHeight(245)
+            QTimer.singleShot(0, lambda: self._splitter.setSizes([245, 625]))
+        else:
+            self.tabs.setMaximumHeight(16777215)
+            QTimer.singleShot(0, lambda: self._splitter.setSizes([600, 260]))
 
     def _log(self, msg):
         ts = datetime.now().strftime("%H:%M:%S")
@@ -820,12 +827,13 @@ class IMSTool(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
         card = QFrame()
-        card.setStyleSheet("QFrame{background:white;border:1px solid #e0e0e0;border-radius:8px;margin:8px;}")
+        card.setStyleSheet("QFrame{background:white;border:1px solid #e0e0e0;border-radius:8px;margin:8px 8px 4px 8px;}")
         cl = QVBoxLayout(card)
-        cl.setContentsMargins(12, 10, 12, 10)
-        cl.setSpacing(8)
+        cl.setContentsMargins(10, 8, 10, 8)
+        cl.setSpacing(6)
 
         # Mode bar — compact row
         mode_bar = QHBoxLayout()
@@ -881,13 +889,13 @@ class IMSTool(QWidget):
         # Command preview — stretches to fill available card space
         self.cap_preview = QTextEdit()
         self.cap_preview.setReadOnly(True)
-        self.cap_preview.setMinimumHeight(40)
+        self.cap_preview.setFixedHeight(88)
         self.cap_preview.setStyleSheet(
             "QTextEdit{background:#fafafa;border:1px solid #e0e0e0;border-radius:8px;"
             "padding:8px 12px;font-family:Consolas,monospace;font-size:11px;color:#1a1a1a;}")
-        cl.addWidget(self.cap_preview, 1)
+        cl.addWidget(self.cap_preview)
 
-        layout.addWidget(card)
+        layout.addWidget(card, 0, Qt.AlignTop)
 
         self._on_cap_mode_changed(self.cap_mode_cb.currentIndex())
         self._cap_update_preview()
@@ -1252,7 +1260,7 @@ class IMSTool(QWidget):
                     return
                 self._append_patch_paths(fpaths)
             else:
-                fpath, _ = QFileDialog.getOpenFileName(self, "Select Patch", default_dir, "tar.gz (*.tar.gz);;All Files (*)")
+                fpath, _ = QFileDialog.getOpenFileName(self, "Select Patch", default_dir, "All Files (*);;tar.gz (*.tar.gz)")
                 if not fpath:
                     return
                 fname = os.path.basename(fpath)
@@ -2238,15 +2246,54 @@ class SBCMCaptureWorker(QThread):
         txt = data.decode("utf-8",errors="replace")
         self.log.emit(f"[SBCM] [expect] '{expected}' timeout, recv={txt[-300:]}")
         raise TimeoutError(f"Expected '{expected}' not found. Got: {txt[-300:]}")
+    def _expect_any(self, chan, expected_list, timeout=30):
+        data = b""; start = time.time()
+        while time.time()-start < timeout:
+            if chan.recv_ready():
+                chunk = chan.recv(4096)
+                if not chunk: break
+                data += chunk
+                txt = data.decode("utf-8",errors="replace")
+                for expected in expected_list:
+                    if expected in txt:
+                        self.log.emit(f"[SBCM] [expect] '{expected}' matched")
+                        return expected, txt
+            elif chan.exit_status_ready(): break
+            else: time.sleep(0.1)
+        txt = data.decode("utf-8",errors="replace")
+        labels = ", ".join(repr(x) for x in expected_list)
+        self.log.emit(f"[SBCM] [expect] any({labels}) timeout, recv={txt[-300:]}")
+        raise TimeoutError(f"Expected one of {labels} not found. Got: {txt[-300:]}")
     def _send_cmd(self, chan, text, label=None):
         label = label or text.rstrip("\n")
         self.log.emit(f"[SBCM] [send] {label}"); chan.send(text)
     def _telnet_and_diagnose(self, chan):
         self._recv_all(chan)
         self._send_cmd(chan, "telnet 127.0.0.1\n")
-        self._expect(chan, "[USERNAME]:"); self._send_cmd(chan, "admin\n", "admin (username)")
-        self._expect(chan, "[PASSWORD]:"); self._send_cmd(chan, "admin\n", "admin (password)")
-        self._expect(chan, "NuBiz>>"); self._send_cmd(chan, "cm diagnose\n"); self._expect(chan, "NuBiz$$")
+        for _ in range(3):
+            self._expect(chan, "[USERNAME]:")
+            self._send_cmd(chan, "admin\n", "admin (username)")
+            self._expect(chan, "[PASSWORD]:")
+            self._send_cmd(chan, "admin\n", "admin (password)")
+            for _ in range(4):
+                matched, _ = self._expect_any(
+                    chan,
+                    ["NuBiz>>", "Kick it out", "Y/N", "[USERNAME]:"],
+                    timeout=30,
+                )
+                if matched == "NuBiz>>":
+                    self._send_cmd(chan, "cm diagnose\n")
+                    self._expect(chan, "NuBiz$$")
+                    return
+                if matched in ("Kick it out", "Y/N"):
+                    self._send_cmd(chan, "Y\n", "kick existing admin session Y")
+                    continue
+                if matched == "[USERNAME]:":
+                    self._send_cmd(chan, "admin\n", "admin (username)")
+                    self._expect(chan, "[PASSWORD]:")
+                    self._send_cmd(chan, "admin\n", "admin (password)")
+                    continue
+        raise TimeoutError("SBCM telnet login failed: NuBiz>> not reached")
     def _stop_capture(self, chan):
         self._send_cmd(chan, "debug dp 0x912\n")
         self._expect(chan, "<para1>"); self._send_cmd(chan, "\n","enter para1")
