@@ -54,7 +54,9 @@
       "method": "kill",
       "user": "root",
       "commands": [],
-      "process_names": ["psc"]
+      "process_names": [
+        "psc"
+      ]
     },
     "backup": {
       "user": "utoss",
@@ -308,6 +310,185 @@
         "command": "cd /opt/wacos/mswitch/cdrTools/bin && ./status.sh",
         "expected": "process is running",
         "wait": 3
+      }
+    }
+  },
+  "SBCS_Sag1": {
+    "description": "SBCS Sag1",
+    "host_name_required": "SBCS",
+    "stop": {
+      "method": "script",
+      "user": "root",
+      "commands": [
+        "killall Sag1"
+      ],
+      "process_names": []
+    },
+    "backup": {
+      "user": "root",
+      "base_dir": "/home/spnr/bin",
+      "items": [
+        {
+          "source": "Sag1",
+          "backup_suffix": "_{date}",
+          "remove_source": true
+        }
+      ]
+    },
+    "patch": {
+      "filename": "Sag1",
+      "keyword": "Sag1",
+      "default_dir": "F:\\BaiduNetdiskDownload\\Bangladesh\\ICX_BTCL\\实际版本\\SBC_1.1.82_upgrade_BD\\signal",
+      "extract_user": "root",
+      "tar_path": "/home/spnr/bin",
+      "multiple": false,
+      "extract": false,
+      "post_upload": {
+        "user": "root",
+        "commands": [
+          "cd /home/spnr/bin",
+          "chmod 755 Sag1"
+        ]
+      }
+    },
+    "post_extract": null,
+    "config_files": [],
+    "chown": null,
+    "license": {
+      "has_license": false,
+      "file_path": "",
+      "user": ""
+    },
+    "start": {
+      "user": "root",
+      "commands": [
+        "killall Sag1"
+      ],
+      "check": {
+        "command": "ps -ef | grep Sag1",
+        "expected": "Sag1-158.conf",
+        "wait": 10
+      }
+    }
+  },
+  "SBCS_WEB": {
+    "description": "SBCS WEB",
+    "host_name_required": "SBCS",
+    "stop": {
+      "method": "script",
+      "user": "root",
+      "commands": [
+        "killall Sag1"
+      ],
+      "process_names": []
+    },
+    "backup": {
+      "user": "root",
+      "base_dir": "/var/www/html",
+      "items": [
+        {
+          "source": "index.html",
+          "backup_suffix": "_{date}",
+          "remove_source": true
+        },
+        {
+          "source": "spnr",
+          "backup_suffix": "_{date}",
+          "remove_source": true
+        }
+      ]
+    },
+    "patch": {
+      "filename": "*",
+      "keyword": "",
+      "default_dir": "F:\\BaiduNetdiskDownload\\Bangladesh\\ICX_BTCL\\实际版本\\SBC_1.1.82_upgrade_BD\\web",
+      "extract_user": "root",
+      "tar_path": "/var/www/html",
+      "multiple": true,
+      "allow_dirs": true,
+      "extract": false
+    },
+    "post_extract": null,
+    "config_files": [],
+    "chown": null,
+    "license": {
+      "has_license": false,
+      "file_path": "",
+      "user": ""
+    },
+    "start": {
+      "user": "root",
+      "commands": [
+        "killall Sag1"
+      ],
+      "check": {
+        "command": "ps -ef | grep Sag1",
+        "expected": "Sag1-158.conf",
+        "wait": 10
+      }
+    }
+  },
+  "SBCM": {
+    "description": "SBCM",
+    "host_name_required": "SBCM",
+    "stop": {
+      "method": "script",
+      "user": "root",
+      "commands": [
+        "cd /sbc/MPB/",
+        "./killall.sh"
+      ],
+      "process_names": []
+    },
+    "backup": {
+      "user": "root",
+      "base_dir": "/",
+      "items": []
+    },
+    "patch": {
+      "filename": "*",
+      "keyword": "",
+      "default_dir": "F:\\BaiduNetdiskDownload\\Bangladesh\\ICX_BTCL\\实际版本\\SBC_1.1.82_upgrade_BD\\media",
+      "extract_user": "root",
+      "tar_path": "/opt/tar",
+      "multiple": true,
+      "extract": false,
+      "post_upload": {
+        "user": "root",
+        "commands": [
+          "cd /opt/tar",
+          "chmod 755 install.sh"
+        ]
+      },
+      "cleanup_uploaded": true,
+      "cleanup_user": "root"
+    },
+    "post_extract": {
+      "user": "root",
+      "commands": [
+        "cd /opt/tar",
+        "./install.sh"
+      ]
+    },
+    "config_files": [],
+    "chown": null,
+    "license": {
+      "has_license": false,
+      "file_path": "",
+      "user": ""
+    },
+    "start": {
+      "user": "root",
+      "commands": [
+        "cd /etc",
+        "./rte-setup.sh",
+        "cd /sbc/MPB/",
+        "./checkrun.sh &"
+      ],
+      "check": {
+        "command": "ps -ef|grep PL",
+        "expected": "PLATFORM_MPB.a",
+        "wait": 30
       }
     }
   }

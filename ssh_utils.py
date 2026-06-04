@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Shared SSH connection utilities extracted from Tcpdump_Capture_sub.py."""
+"""Shared SSH connection utilities for toolbox modules."""
 import os, sys, json, logging
 
 import paramiko

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import sys, os, json, logging, time, threading, difflib, posixpath, re, subprocess
+import sys, os, json, logging, time, threading, difflib, posixpath, re, subprocess, tarfile, tempfile
 from datetime import datetime
 from collections import defaultdict
 
@@ -432,6 +432,7 @@ class IMSTool(QWidget):
         if prefill_host_idx is not None and 0 <= prefill_host_idx < len(self._hosts):
             cb.setCurrentIndex(prefill_host_idx)
         self._cap_update_preview()
+        self._update_upgrade_button_state()
         return row
 
     def _remove_host_row(self, frame):
@@ -443,6 +444,7 @@ class IMSTool(QWidget):
         if not self._host_rows:
             self._add_host_row()
         self._cap_update_preview()
+        self._update_upgrade_button_state()
 
     def _on_host_selected(self, frame):
         for r in self._host_rows:
@@ -451,6 +453,7 @@ class IMSTool(QWidget):
                 self._test_connection(r)
                 break
         self._cap_update_preview()
+        self._update_upgrade_button_state()
 
     def _test_connection(self, row):
         idx = row['cb'].currentIndex()
@@ -655,6 +658,7 @@ class IMSTool(QWidget):
                     if cb.itemData(i) == current:
                         cb.setCurrentIndex(i); break
             cb.blockSignals(False)
+        self._update_upgrade_button_state()
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Type.MouseButtonPress:
@@ -1078,29 +1082,60 @@ class IMSTool(QWidget):
         self.up_ne_combo = QComboBox()
         for ne_type, nc in self.ne_configs.items():
             self.up_ne_combo.addItem(f"{nc.get('description','?')} ({ne_type})", (ne_type, nc))
+        self.up_ne_combo.currentIndexChanged.connect(lambda _: self._update_upgrade_button_state())
         nfl.addRow("NE Type:", self.up_ne_combo)
         self.up_desc_input = QLineEdit()
         self.up_desc_input.setPlaceholderText("Optional description for this upgrade")
         nfl.addRow("Description:", self.up_desc_input)
         patch_row = QHBoxLayout()
-        self.up_patch_path = QLineEdit(); self.up_patch_path.setPlaceholderText("Select patch file (tar.gz)")
+        self.up_patch_path = QLineEdit(); self.up_patch_path.setPlaceholderText("Select patch file(s)")
         patch_row.addWidget(self.up_patch_path)
         patch_btn = QPushButton("Browse"); patch_btn.setStyleSheet("QPushButton{background:#f5f5f5;color:#1a1a1a;border:1px solid #e0e0e0;border-radius:8px;padding:7px 16px;font-size:12px;}QPushButton:hover{background:#eee;}")
         def on_browse_patch():
-            fpath, _ = QFileDialog.getOpenFileName(self, "Select Patch", "", "tar.gz (*.tar.gz)")
-            if not fpath:
-                return
-            ne_type, _ = self.up_ne_combo.currentData()
-            keyword_map = {"CCF": "PSC", "MGCF": "MGCF", "XCDR": "XCDR", "QUERY_data": "QUERY", "QUERY_opt": "QUERY", "cdrTools": "cdrTools"}
-            keyword = keyword_map.get(ne_type, ne_type)
-            fname = os.path.basename(fpath)
-            if keyword.lower() not in fname.lower():
-                QMessageBox.warning(self, "File Mismatch",
-                    f"NE type「{ne_type}」requires filename containing「{keyword}」, but selected file is「{fname}」")
-                return
-            self.up_patch_path.setText(fpath)
+            ne_type, ne_config = self.up_ne_combo.currentData()
+            patch_cfg = ne_config.get("patch", {})
+            default_dir = patch_cfg.get("default_dir") or ""
+            keyword = self._patch_keyword(ne_type, ne_config)
+            if patch_cfg.get("multiple"):
+                fpaths, _ = QFileDialog.getOpenFileNames(self, "Select Patches", default_dir, "All Files (*)")
+                if not fpaths:
+                    return
+                bad = [os.path.basename(fp) for fp in fpaths if keyword and keyword.lower() not in os.path.basename(fp).lower()]
+                if bad:
+                    QMessageBox.warning(self, "File Mismatch", f"Patch filename should contain \"{keyword}\": {bad[0]}")
+                    return
+                self._append_patch_paths(fpaths)
+            else:
+                fpath, _ = QFileDialog.getOpenFileName(self, "Select Patch", default_dir, "tar.gz (*.tar.gz);;All Files (*)")
+                if not fpath:
+                    return
+                fname = os.path.basename(fpath)
+                if keyword and keyword.lower() not in fname.lower():
+                    QMessageBox.warning(self, "File Mismatch",
+                        f"NE type {ne_type} requires filename containing {keyword}, but selected file is {fname}")
+                    return
+                self.up_patch_path.setText(fpath)
         patch_btn.clicked.connect(on_browse_patch)
         patch_row.addWidget(patch_btn)
+        patch_dir_btn = QPushButton("Folder"); patch_dir_btn.setStyleSheet("QPushButton{background:#f5f5f5;color:#1a1a1a;border:1px solid #e0e0e0;border-radius:8px;padding:7px 16px;font-size:12px;}QPushButton:hover{background:#eee;}")
+        def on_browse_patch_dir():
+            ne_type, ne_config = self.up_ne_combo.currentData()
+            patch_cfg = ne_config.get("patch", {})
+            if not patch_cfg.get("allow_dirs"):
+                QMessageBox.warning(self, "Warning", "Current NE type does not accept folder patches")
+                return
+            default_dir = patch_cfg.get("default_dir") or ""
+            dpath = QFileDialog.getExistingDirectory(self, "Select Patch Folder", default_dir)
+            if not dpath:
+                return
+            keyword = self._patch_keyword(ne_type, ne_config)
+            dname = os.path.basename(os.path.normpath(dpath))
+            if keyword and keyword.lower() not in dname.lower():
+                QMessageBox.warning(self, "File Mismatch", f"Patch folder name should contain \"{keyword}\": {dname}")
+                return
+            self._append_patch_paths([dpath])
+        patch_dir_btn.clicked.connect(on_browse_patch_dir)
+        patch_row.addWidget(patch_dir_btn)
         nfl.addRow("Patch File:", patch_row)
         layout.addWidget(ne_group)
 
@@ -1151,6 +1186,56 @@ class IMSTool(QWidget):
                 return json.load(f)
         except: return {}
 
+    def _host_display_name(self, host):
+        if not host:
+            return ""
+        return " ".join(str(host.get(k, "")) for k in ("name", "desc", "host"))
+
+    def _patch_keyword(self, ne_type, ne_config):
+        patch_cfg = ne_config.get("patch", {}) if ne_config else {}
+        if "keyword" in patch_cfg:
+            return patch_cfg.get("keyword") or ""
+        keyword_map = {"CCF": "PSC", "MGCF": "MGCF", "XCDR": "XCDR", "QUERY_data": "QUERY", "QUERY_opt": "QUERY", "cdrTools": "cdrTools"}
+        return keyword_map.get(ne_type, ne_type)
+
+    def _patch_paths(self):
+        text = self.up_patch_path.text().strip()
+        return [part.strip().strip('"') for part in text.split(";") if part.strip()]
+
+    def _set_patch_paths(self, paths):
+        unique = []
+        seen = set()
+        for path in paths:
+            norm = os.path.normpath(path.strip().strip('"'))
+            key = os.path.normcase(norm)
+            if norm and key not in seen:
+                unique.append(norm)
+                seen.add(key)
+        self.up_patch_path.setText(";".join(unique))
+
+    def _append_patch_paths(self, paths):
+        self._set_patch_paths(self._patch_paths() + paths)
+
+    def _is_host_allowed_for_ne(self, ne_config, host):
+        required = (ne_config or {}).get("host_name_required")
+        if not required:
+            return True, ""
+        host_name = self._host_display_name(host)
+        if required.lower() in host_name.lower():
+            return True, ""
+        return False, f"Selected NE requires host name containing {required}"
+
+    def _update_upgrade_button_state(self):
+        if not hasattr(self, "up_start_btn"):
+            return
+        if self._up_worker and self._up_worker.isRunning():
+            return
+        ne_data = self.up_ne_combo.currentData() if hasattr(self, "up_ne_combo") else None
+        ne = ne_data[1] if ne_data else {}
+        allowed, reason = self._is_host_allowed_for_ne(ne, self._first_selected_host())
+        self.up_start_btn.setEnabled(allowed)
+        self.up_start_btn.setToolTip("" if allowed else reason)
+
     def _do_upgrade(self):
         h = self._first_selected_host()
         if not h:
@@ -1158,10 +1243,27 @@ class IMSTool(QWidget):
         ne_data = self.up_ne_combo.currentData()
         if not ne_data:
             QMessageBox.warning(self, "Warning", "Select NE type"); return
-        ne = ne_data[1]
-        patch = self.up_patch_path.text().strip()
-        if not patch or not os.path.isfile(patch):
-            QMessageBox.warning(self, "Warning", "Select a valid patch file"); return
+        ne_type, ne = ne_data
+        allowed, reason = self._is_host_allowed_for_ne(ne, h)
+        if not allowed:
+            QMessageBox.warning(self, "Warning", reason)
+            self._update_upgrade_button_state()
+            return
+        patch_cfg = ne.get("patch", {})
+        patch_paths = self._patch_paths()
+        if not patch_paths:
+            QMessageBox.warning(self, "Warning", "Select valid patch file(s)"); return
+        if not patch_cfg.get("multiple") and len(patch_paths) != 1:
+            QMessageBox.warning(self, "Warning", "Select only one patch file for this NE type"); return
+        allow_dirs = bool(patch_cfg.get("allow_dirs"))
+        missing = [p for p in patch_paths if not os.path.isfile(p) and not (allow_dirs and os.path.isdir(p))]
+        if missing:
+            QMessageBox.warning(self, "Warning", f"Patch path not found: {missing[0]}"); return
+        keyword = self._patch_keyword(ne_type, ne)
+        bad = [p for p in patch_paths if keyword and keyword.lower() not in os.path.basename(p).lower()]
+        if bad:
+            QMessageBox.warning(self, "File Mismatch", f"Patch filename should contain \"{keyword}\"")
+            return
 
         self._upgrading = True
         self.up_start_btn.setEnabled(False); self.up_stop_btn.setEnabled(True)
@@ -1171,12 +1273,14 @@ class IMSTool(QWidget):
             lbl.setText(lbl.text().replace("✅","⏳").replace("❌","⏳").replace("⬜","⏳"))
         self.progress_bar.setVisible(True); self.progress_bar.setValue(0)
 
-        self._up_worker = SSHWorker(h["host"], h.get("port",22), h["user"], h.get("pwd",""), ne, patch)
+        patch_arg = patch_paths if patch_cfg.get("multiple") else patch_paths[0]
+        self._up_worker = SSHWorker(h["host"], h.get("port",22), h["user"], h.get("pwd",""), ne, patch_arg)
         self._up_worker.log_signal.connect(self._log)
         self._up_worker.step_signal.connect(self._on_up_step)
         self._up_worker.finished_signal.connect(self._on_up_finished)
         self._up_worker.config_diff_signal.connect(self._on_up_config_diff)
         self._up_worker.kill_residual_signal.connect(self._on_up_kill_residual)
+        self._up_worker.finished.connect(self._on_up_thread_finished)
         self._up_worker.start()
 
     def _stop_upgrade(self):
@@ -1236,7 +1340,12 @@ class IMSTool(QWidget):
                 if "⏳" in lbl.text():
                     lbl.setText(lbl.text().replace("⏳","✅"))
         self._log(f"[upgrade] Finished: {status}")
-        self._up_worker = None
+        self._update_upgrade_button_state()
+
+    def _on_up_thread_finished(self):
+        if self.sender() is self._up_worker:
+            self._up_worker = None
+            self._update_upgrade_button_state()
 
     def _on_up_config_diff(self, diff_items):
         dlg = ConfigDiffDialog(diff_items, self)
@@ -1867,6 +1976,66 @@ class SSHWorker(QThread):
     def _step(self, msg): self.step_signal.emit(msg)
     def set_config_diff_result(self, r): self._config_diff_result = r
     def set_kill_decision(self, d): self._kill_continue = d
+    def _patch_files(self):
+        if isinstance(self.patch_local, (list, tuple)):
+            return list(self.patch_local)
+        return [self.patch_local]
+
+    def _ensure_remote_dir(self, remote_dir):
+        self._exec(f"mkdir -p {_shell_quote(remote_dir)}")
+
+    def _upload_file(self, local_path, remote_path):
+        self._ensure_remote_dir(posixpath.dirname(remote_path))
+        remote_name = os.path.basename(local_path)
+        self._log(f"Uploading {remote_name} -> {remote_path} ...")
+        start = time.time()
+        last_pct = [0]
+        def progress(transferred, total):
+            if self._stopped:
+                raise Exception("stopped")
+            if total:
+                pct = int(transferred / total * 100)
+                if pct >= last_pct[0] + 10 or pct == 100:
+                    elapsed = max(time.time() - start, 0.001)
+                    speed = transferred / elapsed / 1024
+                    self._log(f"  [{pct:3d}%] {self._fmt_size(transferred)}/{self._fmt_size(total)} {speed:.0f}KB/s")
+                    last_pct[0] = pct
+        self.sftp.put(local_path, remote_path, callback=progress)
+        self._check_remote_path(remote_path, "uploaded patch")
+        self._log(f"Upload done ({time.time() - start:.1f}s)")
+
+    def _upload_dir(self, local_dir, remote_dir):
+        folder_name = os.path.basename(os.path.normpath(local_dir))
+        remote_parent = posixpath.dirname(remote_dir.rstrip("/"))
+        archive_name = f".{folder_name}_upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.tar.gz"
+        remote_archive = posixpath.join(remote_parent, archive_name)
+        local_archive = None
+        self._log(f"Packing folder {folder_name} locally ...")
+        try:
+            with tempfile.NamedTemporaryFile(prefix=f"{folder_name}_", suffix=".tar.gz", delete=False) as tmp:
+                local_archive = tmp.name
+            with tarfile.open(local_archive, "w:gz") as tar:
+                tar.add(local_dir, arcname=folder_name)
+            self._log(f"Packed {folder_name}: {self._fmt_size(os.path.getsize(local_archive))}")
+            self._upload_file(local_archive, remote_archive)
+            if self._stopped:
+                return
+            self._log(f"Extracting {remote_archive} -> {remote_parent} ...")
+            rc, _, _ = self._exec(
+                f"rm -rf {_shell_quote(remote_dir)} && tar -xzf {_shell_quote(remote_archive)} -C {_shell_quote(remote_parent)} && rm -f {_shell_quote(remote_archive)}",
+                timeout=300,
+                user=self.ne["patch"].get("extract_user", "root")
+            )
+            if rc != 0:
+                raise RuntimeError(f"remote folder extract failed rc={rc}")
+            self._check_remote_path(remote_dir, "uploaded patch folder")
+            self._log(f"Folder upload done: {remote_dir}")
+        finally:
+            if local_archive and os.path.exists(local_archive):
+                try:
+                    os.remove(local_archive)
+                except Exception as e:
+                    self._log(f"  [warn] failed removing local temp archive: {e}")
 
     def _exec(self, cmd, timeout=60, user=None, input_str=None):
         full_cmd = cmd
@@ -1949,7 +2118,9 @@ class SSHWorker(QThread):
     def run(self):
         try:
             self._log("═"*50); self._log(f"IMS NE Upgrade Start"); self._log(f"Target: {self.host}:{self.port}")
-            self._log(f"NE: {self.ne.get('description','?')}"); self._log(f"Patch: {os.path.basename(self.patch_local)} ({self._fmt_size(os.path.getsize(self.patch_local))})")
+            self._log(f"NE: {self.ne.get('description','?')}")
+            for patch_file in self._patch_files():
+                self._log(f"Patch: {os.path.basename(patch_file)} ({self._fmt_size(os.path.getsize(patch_file))})")
             self._log("═"*50)
             self._log(f"Connecting {self.host}:{self.port} ...")
             self.ssh = paramiko.SSHClient(); self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -1958,7 +2129,8 @@ class SSHWorker(QThread):
             steps = [("stop",self._do_stop),("backup",self._do_backup),("upload",self._do_upload),
                      ("extract",self._do_extract),("post_extract",self._do_post_extract),
                      ("config_diff",self._do_config_diff),("chown",self._do_chown),
-                     ("license",self._do_license),("start",self._do_start)]
+                     ("license",self._do_license),("start",self._do_start),
+                     ("cleanup",self._do_cleanup_uploads)]
             for sk, sf in steps:
                 if self._stopped: break
                 self._step(sk); sf(); self._log("")
@@ -1971,8 +2143,12 @@ class SSHWorker(QThread):
         except Exception as e:
             self._log(f"✗ {e}"); import traceback; self._log(traceback.format_exc()); self.finished_signal.emit("error")
         finally:
-            if self.sftp: self.sftp.close()
-            if self.ssh: self.ssh.close()
+            if self.sftp:
+                try: self.sftp.close()
+                except Exception as e: self._log(f"[warn] SFTP close failed: {e}")
+            if self.ssh:
+                try: self.ssh.close()
+                except Exception as e: self._log(f"[warn] SSH close failed: {e}")
 
     def _do_stop(self):
         cfg = self.ne["stop"]; self._log("━━━ Step 1/9: Stop ━━━")
@@ -2021,33 +2197,38 @@ class SSHWorker(QThread):
         self._log("✓ Step 2 done")
 
     def _do_upload(self):
-        self._log("━━━ Step 3/9: Upload ━━━")
-        tar_path = self.ne["patch"].get("tar_path","/opt/tar")
-        remote_name = os.path.basename(self.patch_local)
-        remote_path = posixpath.join(tar_path, remote_name)
+        self._log("Step 3/9: Upload")
+        tar_path = self.ne["patch"].get("tar_path", "/opt/tar")
         self._exec(f"mkdir -p {_shell_quote(tar_path)}")
-        self._log("Uploading..."); start = time.time()
-        last_pct = [0]
-        def progress(t, total):
-            if self._stopped: raise Exception("stopped")
-            if total:
-                pct = int(t / total * 100)
-                if pct >= last_pct[0] + 10 or pct == 100:
-                    elapsed = max(time.time() - start, 0.001)
-                    self._log(f"  [{pct:3d}%] {self._fmt_size(t)}/{self._fmt_size(total)} {t / elapsed / 1024:.0f}KB/s")
-                    last_pct[0] = pct
-        self.sftp.put(self.patch_local, remote_path, callback=progress)
-        self._uploaded_path = remote_path
-        self._check_remote_path(remote_path, "uploaded patch")
-        self._log(f"✓ Upload done ({time.time()-start:.1f}s)"); self._log("✓ Step 3 done")
+        self._uploaded_paths = []
+        for patch_file in self._patch_files():
+            if self._stopped:
+                return
+            remote_name = os.path.basename(patch_file)
+            remote_path = posixpath.join(tar_path, remote_name)
+            if os.path.isdir(patch_file):
+                self._upload_dir(patch_file, remote_path)
+            else:
+                self._upload_file(patch_file, remote_path)
+            self._uploaded_paths.append(remote_path)
+        self._uploaded_path = self._uploaded_paths[0] if self._uploaded_paths else ""
+        post_upload = self.ne["patch"].get("post_upload")
+        if post_upload and not self._stopped:
+            self._log("Post upload commands...")
+            self._exec_script_user(post_upload.get("user", "root"), post_upload.get("commands", []))
+        self._log("Step 3 done")
 
     def _do_extract(self):
-        self._log("━━━ Step 4/9: Extract ━━━")
+        self._log("Step 4/9: Extract")
+        if self.ne["patch"].get("extract") is False:
+            self._log("  skip extract by patch config")
+            return
         user = self.ne["patch"]["extract_user"]
         self._check_remote_path(self._uploaded_path, "uploaded patch")
         rc, _, _ = self._exec(f"cd /opt/tar && tar -xzf {_shell_quote(self._uploaded_path)} -C /", timeout=180, user=user)
-        if rc!=0: raise RuntimeError(f"tar extract failed rc={rc}")
-        self._log("✓ Step 4 done")
+        if rc != 0:
+            raise RuntimeError(f"tar extract failed rc={rc}")
+        self._log("Step 4 done")
 
     def _do_post_extract(self):
         cfg = self.ne.get("post_extract"); self._log("━━━ Step 5/9: Post Extract ━━━")
@@ -2157,6 +2338,26 @@ class SSHWorker(QThread):
             if rc==0 and ck.get("expected","") in out: self._log("✓ Start OK")
             else: self._log("⚠ Start check failed")
         self._log("✓ Step 9 done")
+
+    def _do_cleanup_uploads(self):
+        patch_cfg = self.ne.get("patch", {})
+        if not patch_cfg.get("cleanup_uploaded"):
+            return
+        paths = getattr(self, "_uploaded_paths", [])
+        if not paths:
+            self._log("Cleanup uploaded patches: no uploaded paths")
+            return
+        self._log("Cleanup uploaded patches")
+        cleanup_user = patch_cfg.get("cleanup_user", "root")
+        for remote_path in paths:
+            if self._stopped:
+                return
+            rc, _, _ = self._exec(f"rm -f {_shell_quote(remote_path)}", user=cleanup_user)
+            if rc == 0:
+                self._log(f"  removed {remote_path}")
+            else:
+                self._log(f"  [warn] failed removing {remote_path} rc={rc}")
+
 
 # ═══════════════════════════════════════════════
 #  Log Viewer Workers (from LogViewer)
