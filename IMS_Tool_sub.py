@@ -92,6 +92,47 @@ class ConnectWorker(QThread):
 #  ConfigDiffDialog (from IMS_NE_Upgrade)
 # ═══════════════════════════════════════════════
 
+class InterfaceScanWorker(QThread):
+    result = Signal(list, str)
+    def __init__(self, host, port, user, pwd):
+        super().__init__()
+        self.host = host; self.port = int(port); self.user = user; self.pwd = pwd
+    def run(self):
+        c = None
+        try:
+            c = paramiko.SSHClient()
+            c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            c.connect(self.host, self.port, self.user, self.pwd, timeout=8, banner_timeout=8, auth_timeout=8)
+            cmd = (
+                "for p in /sys/class/net/*; do "
+                "n=${p##*/}; [ \"$n\" = lo ] && continue; "
+                "state=$(cat \"$p/operstate\" 2>/dev/null || echo unknown); "
+                "addr=$(ip -o -4 addr show dev \"$n\" 2>/dev/null | awk '{print $4}' | paste -sd, -); "
+                "printf '%s|%s|%s\\n' \"$n\" \"$state\" \"$addr\"; "
+                "done"
+            )
+            _, stdout, stderr = c.exec_command(cmd, timeout=15)
+            raw = stdout.read().decode("utf-8", errors="replace").strip()
+            err = stderr.read().decode("utf-8", errors="replace").strip()
+            interfaces = []
+            for line in raw.splitlines():
+                parts = line.split("|", 2)
+                if not parts or not parts[0].strip():
+                    continue
+                name = parts[0].strip().split("@", 1)[0]
+                state = parts[1].strip() if len(parts) > 1 else ""
+                addr = parts[2].strip() if len(parts) > 2 else ""
+                if name:
+                    interfaces.append({"name": name, "state": state, "addr": addr})
+            self.result.emit(interfaces, err)
+        except Exception as e:
+            self.result.emit([], str(e))
+        finally:
+            try:
+                if c: c.close()
+            except:
+                pass
+
 class ConfigDiffDialog(QDialog):
     def __init__(self, diff_items, parent=None):
         super().__init__(parent)
@@ -197,6 +238,23 @@ def _format_size(sz):
 def _shell_quote(value):
     return "'" + str(value).replace("'", "'\"'\"'") + "'"
 
+def _remote_tcpdump_match_cmd(remote_path):
+    qpath = _shell_quote(f" -w {remote_path}")
+    return (
+        "for p in $(pgrep -x tcpdump 2>/dev/null); do "
+        'ps -o pid=,args= -p "$p"; '
+        f"done | grep -F -- {qpath} || true"
+    )
+
+def _remote_tcpdump_kill_cmd(remote_path):
+    qpath = _shell_quote(f" -w {remote_path}")
+    return (
+        "for p in $(pgrep -x tcpdump 2>/dev/null); do "
+        'line=$(ps -o args= -p "$p"); '
+        f"case \"$line\" in *{qpath}*) kill \"$p\" 2>/dev/null || true;; esac; "
+        "done"
+    )
+
 # ═══════════════════════════════════════════════
 #  IMSTool - Combined Tool
 # ═══════════════════════════════════════════════
@@ -218,6 +276,7 @@ class IMSTool(QWidget):
         self._log_browse_worker = None
         self._log_tail_worker = None
         self._log_dl_worker = None
+        self._log_download_active = False
         self._active_remote_paths = []
         self._init_ui()
 
@@ -288,14 +347,15 @@ class IMSTool(QWidget):
         self.log_box = QTextEdit()
         self.log_box.setReadOnly(True)
         self.log_box.setFont(QFont("Consolas", 10))
-        self.log_box.setMinimumHeight(80)
+        self.log_box.setMinimumHeight(260)
         self.log_box.setStyleSheet("QTextEdit{background:#fafafa;border:1px solid #e0e0e0;border-radius:8px;padding:8px;font-size:11px;}")
         bl.addWidget(self.log_box)
         self._splitter.addWidget(bottom_panel)
-        self._splitter.setSizes([600, 180])
+        self._splitter.setSizes([245, 625])
 
         # ── Tab change: toggle filter visibility ──
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.tabs.setMaximumHeight(245)
 
         layout.addWidget(self._splitter, 1)
 
@@ -309,6 +369,12 @@ class IMSTool(QWidget):
         for r in self._host_rows:
             if 'filter_section' in r:
                 r['filter_section'].setVisible(show)
+        if show:
+            self.tabs.setMaximumHeight(245)
+            QTimer.singleShot(0, lambda: self._splitter.setSizes([245, 625]))
+        else:
+            self.tabs.setMaximumHeight(16777215)
+            QTimer.singleShot(0, lambda: self._splitter.setSizes([600, 260]))
 
     def _log(self, msg):
         ts = datetime.now().strftime("%H:%M:%S")
@@ -329,9 +395,14 @@ class IMSTool(QWidget):
             elif w.isRunning(): w.terminate()
         for w in getattr(self, '_manual_workers', []) or []:
             if isinstance(w, SBCMCaptureWorker): w.request_stop()
+            elif hasattr(w, 'request_stop'): w.request_stop()
             elif w.isRunning(): w.terminate()
         for w in getattr(self, '_stop_workers', []) or []:
             if w.isRunning(): w.terminate()
+        for r in getattr(self, '_host_rows', []) or []:
+            w = r.get('_iface_worker')
+            if w and w.isRunning():
+                w.terminate()
         if self._active_remote_paths:
             by_host = {}
             for key, rpath in self._active_remote_paths:
@@ -408,6 +479,7 @@ class IMSTool(QWidget):
         fs_layout = QVBoxLayout(filter_section)
         fs_layout.setContentsMargins(0, 0, 0, 0)
         fs_layout.setSpacing(4)
+        row['_interfaces'] = []
         filter_container = QVBoxLayout()
         filter_container.setSpacing(4)
         row['filter_container'] = filter_container
@@ -426,6 +498,7 @@ class IMSTool(QWidget):
 
         row['frame'] = frame
         row['_conn_worker'] = None
+        row['_iface_worker'] = None
         self._host_rows.append(row)
         host_layout = self._host_container
         host_layout.insertWidget(host_layout.count() - 1, frame)
@@ -450,6 +523,7 @@ class IMSTool(QWidget):
         for r in self._host_rows:
             if r['frame'] is frame:
                 self._set_conn_status(r, False)
+                self._reset_interface_combo(r, "any")
                 self._test_connection(r)
                 break
         self._cap_update_preview()
@@ -471,6 +545,58 @@ class IMSTool(QWidget):
 
     def _on_conn_result(self, row, ok, msg):
         self._set_conn_status(row, ok)
+        if ok:
+            self._scan_interfaces(row)
+
+    def _reset_interface_combo(self, row, current="any"):
+        row['_interfaces'] = []
+        for fw in row.get('filters', []):
+            self._populate_interface_combo(fw.get('iface'), [], current)
+
+    def _scan_interfaces(self, row):
+        idx = row['cb'].currentIndex()
+        if idx < 0 or idx >= len(self._hosts):
+            return
+        h = self._hosts[idx]
+        for fw in row.get('filters', []):
+            self._populate_interface_combo(fw.get('iface'), [], "any", scanning=True)
+        w = InterfaceScanWorker(h["host"], h.get("port",22), h["user"], h.get("pwd",""))
+        row['_iface_worker'] = w
+        w.result.connect(lambda interfaces, msg, r=row: self._on_interface_scan_result(r, interfaces, msg))
+        w.finished.connect(lambda r=row: self._on_interface_scan_finished(r))
+        w.start()
+
+    def _on_interface_scan_result(self, row, interfaces, msg):
+        row['_interfaces'] = interfaces
+        for fw in row.get('filters', []):
+            cb = fw.get('iface')
+            previous = cb.currentData() if cb else "any"
+            self._populate_interface_combo(cb, interfaces, previous or "any")
+        if interfaces:
+            self._log(f"[iface] found {len(interfaces)} interfaces on {row['cb'].currentText()}")
+        elif msg:
+            self._log(f"[iface] scan failed: {msg}")
+        self._cap_update_preview()
+
+    def _populate_interface_combo(self, cb, interfaces, current="any", scanning=False):
+        if not cb:
+            return
+        cb.blockSignals(True)
+        cb.clear()
+        cb.addItem("any (scanning...)" if scanning else "any", "any")
+        seen = set()
+        for item in interfaces:
+            name = item.get("name", "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            cb.addItem(name, name)
+        target = cb.findData(current)
+        cb.setCurrentIndex(target if target >= 0 else 0)
+        cb.blockSignals(False)
+
+    def _on_interface_scan_finished(self, row):
+        row['_iface_worker'] = None
 
     def _on_conn_finished(self, row):
         row['connect_btn'].setEnabled(True)
@@ -702,12 +828,13 @@ class IMSTool(QWidget):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
         card = QFrame()
-        card.setStyleSheet("QFrame{background:white;border:1px solid #e0e0e0;border-radius:8px;margin:8px;}")
+        card.setStyleSheet("QFrame{background:white;border:1px solid #e0e0e0;border-radius:8px;margin:8px 8px 4px 8px;}")
         cl = QVBoxLayout(card)
-        cl.setContentsMargins(12, 10, 12, 10)
-        cl.setSpacing(8)
+        cl.setContentsMargins(10, 8, 10, 8)
+        cl.setSpacing(6)
 
         # Mode bar — compact row
         mode_bar = QHBoxLayout()
@@ -763,13 +890,13 @@ class IMSTool(QWidget):
         # Command preview — stretches to fill available card space
         self.cap_preview = QTextEdit()
         self.cap_preview.setReadOnly(True)
-        self.cap_preview.setMinimumHeight(40)
+        self.cap_preview.setFixedHeight(88)
         self.cap_preview.setStyleSheet(
             "QTextEdit{background:#fafafa;border:1px solid #e0e0e0;border-radius:8px;"
             "padding:8px 12px;font-family:Consolas,monospace;font-size:11px;color:#1a1a1a;}")
-        cl.addWidget(self.cap_preview, 1)
+        cl.addWidget(self.cap_preview)
 
-        layout.addWidget(card)
+        layout.addWidget(card, 0, Qt.AlignTop)
 
         self._on_cap_mode_changed(self.cap_mode_cb.currentIndex())
         self._cap_update_preview()
@@ -802,7 +929,7 @@ class IMSTool(QWidget):
                     lines.append(f"  {host_name}: SBCM capture")
                 else:
                     expr = self._build_filter_expr(f)
-                    lines.append(f"  {host_name}: tcpdump -i any -w /opt/tar/... {expr}")
+                    lines.append(f"  {host_name}: tcpdump -i {f['iface']} -w /opt/tar/... {expr}")
         if not lines:
             self.cap_preview.setPlainText("No captures configured")
         else:
@@ -831,8 +958,13 @@ class IMSTool(QWidget):
             rl.addWidget(spacer)
 
         rl.addWidget(QLabel(f"F{fi+1}:"))
+        iface = QComboBox()
+        iface.setFixedWidth(90)
+        self._populate_interface_combo(iface, row.get('_interfaces', []), data.get('iface', 'any') if data else 'any')
+        fw['iface'] = iface; rl.addWidget(iface)
+
         proto = QComboBox()
-        proto.addItems(["any", "tcp", "udp", "icmp", "arp", "sip", "SBCM"])
+        proto.addItems(["any", "tcp", "udp", "icmp", "arp", "SBCM"])
         proto.setFixedWidth(90)
         if data:
             idx = proto.findText(data['proto'])
@@ -849,6 +981,7 @@ class IMSTool(QWidget):
 
         def on_proto(t):
             is_s = t == "SBCM"
+            iface.setDisabled(is_s)
             src_ip.setDisabled(is_s); dst_ip.setDisabled(is_s)
             src_port.setDisabled(is_s); dst_port.setDisabled(is_s); dir_cb.setDisabled(is_s)
         proto.currentTextChanged.connect(on_proto)
@@ -858,7 +991,7 @@ class IMSTool(QWidget):
         fw['frame'] = frame
         row['filters'].append(fw)
         row['filter_container'].addWidget(frame)
-        for w in (proto, src_ip, dst_ip, src_port, dst_port, dir_cb):
+        for w in (iface, proto, src_ip, dst_ip, src_port, dst_port, dir_cb):
             if hasattr(w, 'textChanged'): w.textChanged.connect(self._cap_update_preview)
             elif hasattr(w, 'currentTextChanged'): w.currentTextChanged.connect(self._cap_update_preview)
             elif hasattr(w, 'toggled'): w.toggled.connect(self._cap_update_preview)
@@ -881,6 +1014,7 @@ class IMSTool(QWidget):
         for fw in row['filters']:
             result.append({
                 'proto': fw['proto'].currentText(),
+                'iface': fw['iface'].currentData() or "any",
                 'src_ip': fw['src_ip'].text().strip(),
                 'dst_ip': fw['dst_ip'].text().strip(),
                 'src_port': fw['src_port'].text().strip(),
@@ -925,7 +1059,7 @@ class IMSTool(QWidget):
             else:
                 for fi, f in enumerate(filters):
                     expr = self._build_filter_expr(f)
-                    tasks.append(('tcpdump', h, expr, f"{h.get('name','capture')}_f{fi+1}_{f['proto']}_{ts}.pcap"))
+                    tasks.append(('tcpdump', h, expr, f"{h.get('name','capture')}_f{fi+1}_{f['proto']}_{ts}.pcap", f['iface']))
         if not tasks:
             QMessageBox.warning(self, "Warning", "No hosts selected"); return
         save_dir = self.cap_save_path.text().strip()
@@ -949,7 +1083,9 @@ class IMSTool(QWidget):
         self._multi_completed = False
         self.cap_mode_cb.setEnabled(False); self.cap_start_btn.setEnabled(False)
         self.progress_bar.setVisible(True); self.progress_bar.setValue(0)
-        for ti, (ttype, h, expr, oname) in enumerate(tasks):
+        for ti, task in enumerate(tasks):
+            ttype, h, expr, oname = task[:4]
+            iface = task[4] if len(task) > 4 else "any"
             lp = os.path.join(save_dir, oname)
             if ttype == 'sbcm':
                 self._log(f"[timed] SBCM {h['host']} → {oname}")
@@ -957,7 +1093,7 @@ class IMSTool(QWidget):
             else:
                 rp = f"/opt/tar/{oname}"
                 self._active_remote_paths.append(((h['host'],h.get('port',22),h['user'],h.get('pwd','')), rp))
-                cmd = f"tcpdump -i any -w {rp} {expr}"
+                cmd = f"tcpdump -i {_shell_quote(iface)} -w {rp} {expr}"
                 self._log(f"[timed] {h['host']} → {oname}")
                 self._log(f"[command] {cmd}")
                 w = CaptureWorker(h["host"], h.get("port",22), h["user"], h.get("pwd",""), cmd, rp, lp, duration, self.cap_compress_cb.isChecked())
@@ -982,7 +1118,7 @@ class IMSTool(QWidget):
             else:
                 for fi, f in enumerate(filters):
                     expr = self._build_filter_expr(f)
-                    tasks.append(('tcpdump', h, expr, f"{h.get('name','capture')}_f{fi+1}_{f['proto']}_{ts}.pcap"))
+                    tasks.append(('tcpdump', h, expr, f"{h.get('name','capture')}_f{fi+1}_{f['proto']}_{ts}.pcap", f['iface']))
         if not tasks:
             QMessageBox.warning(self, "Warning", "No hosts selected"); return
         save_dir = self.cap_save_path.text().strip()
@@ -990,32 +1126,44 @@ class IMSTool(QWidget):
             QMessageBox.warning(self, "Warning", "Select save directory"); return
         os.makedirs(save_dir, exist_ok=True)
         self._manual_workers = []; self._manual_errors = 0; self._manual_started_count = 0
-        self._capturing = True; self.cap_mode_cb.setEnabled(False); self.cap_start_btn.setEnabled(False); self.cap_stop_btn.setEnabled(True)
-        for ttype, h, expr, oname in tasks:
+        self._stop_workers = []; self._stop_done = 0; self._stop_errors = 0; self._stop_results = []
+        self._manual_stopping = False; self._stop_completed = False
+        self._capturing = True; self.cap_mode_cb.setEnabled(False); self.cap_start_btn.setEnabled(False); self.cap_stop_btn.setEnabled(False)
+        for task in tasks:
+            ttype, h, expr, oname = task[:4]
+            iface = task[4] if len(task) > 4 else "any"
             lp = os.path.join(save_dir, oname)
             if ttype == 'sbcm':
                 self._log(f"[manual] SBCM {h['host']} → {oname}")
                 w = SBCMCaptureWorker(h["host"], h.get("port",22), h["user"], h.get("pwd",""), lp, duration=None)
                 w.log.connect(self._log); w.done.connect(self._on_manual_stopped); w.error.connect(self._on_manual_error)
+                w.control_ready.connect(self._on_manual_control_ready)
             else:
                 rp = f"/opt/tar/{oname}"
                 self._active_remote_paths.append(((h['host'],h.get('port',22),h['user'],h.get('pwd','')), rp))
-                cmd = f"tcpdump -i any -w {rp} {expr}"
+                cmd = f"tcpdump -i {_shell_quote(iface)} -w {rp} {expr}"
                 self._log(f"[manual] Start {h['host']} → {oname}")
                 self._log(f"[command] {cmd}")
-                w = CaptureStartWorker(h["host"], h.get("port",22), h["user"], h.get("pwd",""), cmd)
+                w = CaptureStartWorker(h["host"], h.get("port",22), h["user"], h.get("pwd",""), cmd, rp)
                 w._out_name = oname; w._remote_path = rp; w._local_path = lp; w._hostname = h['host']
-                w.started.connect(self._on_manual_started); w.error.connect(self._on_manual_error); w.finished.connect(lambda: None)
+                w.log.connect(self._log)
+                w.started.connect(self._on_manual_started); w.control_ready.connect(self._on_manual_control_ready)
+                w.error.connect(self._on_manual_error); w.finished.connect(lambda: None)
             self._manual_workers.append(w); w.start()
 
     def _do_cap_manual_stop(self):
         if not self._manual_workers: return
         self.cap_stop_btn.setEnabled(False); self.cap_start_btn.setEnabled(False)
+        self._manual_stopping = True
         self._stop_workers = []; self._stop_done = 0; self._stop_errors = 0; self._stop_results = []
         self._stop_completed = False
         for w in self._manual_workers:
             if isinstance(w, SBCMCaptureWorker):
                 self._log(f"[manual] Stopping SBCM capture")
+                try:
+                    w.error.disconnect(self._on_manual_error)
+                except (TypeError, RuntimeError):
+                    pass
                 w.error.connect(self._on_manual_stop_error)
                 w.finished.connect(self._on_stop_finished)
                 w.request_stop(); self._stop_workers.append(w)
@@ -1026,12 +1174,27 @@ class IMSTool(QWidget):
                 sw.log.connect(self._log); sw.done.connect(self._on_manual_stopped)
                 sw.error.connect(self._on_manual_stop_error); sw.finished.connect(self._on_stop_finished)
                 self._stop_workers.append(sw); sw.start()
+                if hasattr(w, 'request_stop'):
+                    w.request_stop()
+        if not self._stop_workers:
+            self._manual_stopping = False
+            self._capturing = False
+            self.cap_mode_cb.setEnabled(True); self.cap_start_btn.setEnabled(True); self.cap_stop_btn.setEnabled(False)
 
     def _on_manual_started(self): self._manual_started_count += 1
+    def _on_manual_control_ready(self, ready):
+        sender = self.sender()
+        if sender:
+            sender.setProperty("_control_ready", bool(ready))
+        if not getattr(self, '_capturing', False) or getattr(self, '_manual_stopping', False):
+            return
+        any_ready = any(bool(w.property("_control_ready")) for w in getattr(self, '_manual_workers', []) or [])
+        self.cap_stop_btn.setEnabled(any_ready)
     def _on_manual_error(self, msg):
         self._manual_errors += 1; self._log(f"[error] {msg}")
         if self._manual_errors >= len(self._manual_workers):
-            self._capturing = False; self.cap_mode_cb.setEnabled(True); self.cap_start_btn.setEnabled(True); self.cap_stop_btn.setEnabled(False)
+            self._capturing = False; self._manual_stopping = False
+            self.cap_mode_cb.setEnabled(True); self.cap_start_btn.setEnabled(True); self.cap_stop_btn.setEnabled(False)
     def _on_manual_stopped(self, lp):
         self._stop_done += 1; self._stop_results.append(lp); self._log(f"[done] {lp}")
     def _on_manual_stop_error(self, msg):
@@ -1040,8 +1203,11 @@ class IMSTool(QWidget):
         self._forget_remote_capture(self.sender())
         if self._stop_done + self._stop_errors >= len(self._stop_workers) and not getattr(self, '_stop_completed', False):
             self._stop_completed = True
-            self._capturing = False; self.cap_mode_cb.setEnabled(True); self.cap_start_btn.setEnabled(True); self.cap_stop_btn.setEnabled(False)
+            self._capturing = False; self._manual_stopping = False
+            self.cap_mode_cb.setEnabled(True); self.cap_start_btn.setEnabled(True); self.cap_stop_btn.setEnabled(False)
             if self._stop_results: self._show_cap_done(self._stop_results)
+            self._manual_workers = []
+            self._stop_workers = []
     def _on_multi_progress(self, idx, val):
         count = len(self._timer_workers) or 1
         total = sum((w.property("_prog") or 0) if w != self._timer_workers[idx] else val for i, w in enumerate(self._timer_workers))
@@ -1106,7 +1272,7 @@ class IMSTool(QWidget):
                     return
                 self._append_patch_paths(fpaths)
             else:
-                fpath, _ = QFileDialog.getOpenFileName(self, "Select Patch", default_dir, "tar.gz (*.tar.gz);;All Files (*)")
+                fpath, _ = QFileDialog.getOpenFileName(self, "Select Patch", default_dir, "All Files (*);;tar.gz (*.tar.gz)")
                 if not fpath:
                     return
                 fname = os.path.basename(fpath)
@@ -1414,11 +1580,47 @@ class IMSTool(QWidget):
         self.log_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.log_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.log_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Fixed)
-        self.log_table.setColumnWidth(5, 160)
+        self.log_table.setColumnWidth(5, 180)
         self.log_table.verticalHeader().setVisible(False)
+        self.log_table.verticalHeader().setDefaultSectionSize(34)
+        self.log_table.verticalHeader().setMinimumSectionSize(34)
         self.log_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.log_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.log_table.setAlternatingRowColors(True)
+        self.log_table.setStyleSheet("""
+            QTableWidget {
+                background:white;
+                alternate-background-color:#fbfcfd;
+                border:1px solid #dfe7ec;
+                border-radius:8px;
+                gridline-color:#edf1f4;
+                selection-background-color:#e8f1f6;
+                selection-color:#1f2933;
+            }
+            QTableWidget::item {
+                padding:6px 8px;
+                border:none;
+                color:#1f2933;
+            }
+            QTableWidget::item:hover {
+                background:#f3f7fa;
+                color:#1f2933;
+            }
+            QTableWidget::item:selected,
+            QTableWidget::item:selected:active,
+            QTableWidget::item:selected:!active {
+                background:#e8f1f6;
+                color:#1f2933;
+            }
+            QHeaderView::section {
+                background:#f8fafb;
+                color:#344054;
+                border:none;
+                border-bottom:1px solid #dfe7ec;
+                padding:8px;
+                font-weight:600;
+            }
+        """)
         log_toolbar = QHBoxLayout()
         self.log_select_all_cb = QCheckBox("Select All")
         self.log_select_all_cb.toggled.connect(self._log_select_all)
@@ -1512,6 +1714,7 @@ class IMSTool(QWidget):
     def _log_table_add_row(self, info):
         row = self.log_table.rowCount()
         self.log_table.insertRow(row)
+        self.log_table.setRowHeight(row, 34)
 
         is_missing = info.get("missing", False)
         is_group = info.get("type") == "group"
@@ -1557,11 +1760,13 @@ class IMSTool(QWidget):
         self.log_table.setItem(row, 4, size_item)
 
         actions_w = QWidget()
-        actions_l = QHBoxLayout(actions_w); actions_l.setContentsMargins(4,2,4,2); actions_l.setSpacing(4)
+        actions_l = QHBoxLayout(actions_w); actions_l.setContentsMargins(0,0,0,0); actions_l.setSpacing(6); actions_l.setAlignment(Qt.AlignCenter)
         view_btn = QPushButton("View" if not is_dir else "Enter")
-        view_btn.setStyleSheet("QPushButton{background:#00b894;color:white;border:none;border-radius:4px;padding:4px 12px;font-size:11px;}QPushButton:hover{background:#00a381;}")
+        view_btn.setFixedSize(62, 24)
+        view_btn.setStyleSheet("QPushButton{background:#00b894;color:white;border:none;border-radius:4px;padding:0;font-size:11px;}QPushButton:hover{background:#00a381;}")
         dl_btn = QPushButton("Download")
-        dl_btn.setStyleSheet("QPushButton{background:#0984e3;color:white;border:none;border-radius:4px;padding:4px 12px;font-size:11px;}QPushButton:hover{background:#0873c4;}")
+        dl_btn.setFixedSize(86, 24)
+        dl_btn.setStyleSheet("QPushButton{background:#0984e3;color:white;border:none;border-radius:4px;padding:0;font-size:11px;}QPushButton:hover{background:#0873c4;}")
         if is_missing:
             view_btn.setEnabled(False); dl_btn.setEnabled(False); cb.setEnabled(False)
         if is_group:
@@ -1578,7 +1783,7 @@ class IMSTool(QWidget):
         else:
             view_btn.clicked.connect(lambda checked, p=fpath: self._log_view_file_at(p))
             dl_btn.clicked.connect(lambda checked, p=fpath, n=info.get("name","file"): self._log_download_path(p))
-        actions_l.addWidget(view_btn); actions_l.addWidget(dl_btn); actions_l.addStretch()
+        actions_l.addWidget(view_btn); actions_l.addWidget(dl_btn)
         self.log_table.setCellWidget(row, 5, actions_w)
 
     def _on_log_list_finished(self):
@@ -1668,6 +1873,9 @@ class IMSTool(QWidget):
         self.log_stop_tail_btn.setVisible(False)
 
     def _log_download(self):
+        if getattr(self, '_log_download_active', False):
+            self._log("[download] Another download is running")
+            return
         rows = self._get_log_selected_rows()
         if not rows: return
         h = self._current_log_host()
@@ -1683,33 +1891,70 @@ class IMSTool(QWidget):
                 files_to_dl.append(info["path"])
             else:
                 files_to_dl.append(info["path"])
-        self._log_dl_worker = LogDownloadWorker(h["host"], h.get("port",22), h["user"], h.get("pwd",""), files_to_dl, save_dir)
-        self._log_dl_worker.log.connect(self._log)
-        self._log_dl_worker.done.connect(lambda: self._log("[download] Done"))
-        self._log_dl_worker.error.connect(lambda e: self._log(f"[error] {e}"))
-        self._log_dl_worker.start()
+        self._start_log_download(files_to_dl, save_dir)
 
     def _log_download_group(self, group_files):
+        if getattr(self, '_log_download_active', False):
+            self._log("[download] Another download is running")
+            return
         h = self._current_log_host()
         if not h: return
         save_dir = QFileDialog.getExistingDirectory(self, "Save to")
         if not save_dir: return
-        self._log_dl_worker = LogDownloadWorker(h["host"], h.get("port",22), h["user"], h.get("pwd",""), group_files, save_dir)
-        self._log_dl_worker.log.connect(self._log)
-        self._log_dl_worker.done.connect(lambda: self._log("[download] Done"))
-        self._log_dl_worker.error.connect(lambda e: self._log(f"[error] {e}"))
-        self._log_dl_worker.start()
+        self._start_log_download(group_files, save_dir)
 
     def _log_download_path(self, path):
+        if getattr(self, '_log_download_active', False):
+            self._log("[download] Another download is running")
+            return
         h = self._current_log_host()
         if not h: return
         save_dir = QFileDialog.getExistingDirectory(self, "Save to")
         if not save_dir: return
-        self._log_dl_worker = LogDownloadWorker(h["host"], h.get("port",22), h["user"], h.get("pwd",""), [{"remote_path": path, "filename": os.path.basename(path)}], save_dir)
+        self._start_log_download([{"remote_path": path, "filename": os.path.basename(path)}], save_dir)
+
+    def _start_log_download(self, files_to_dl, save_dir):
+        if not files_to_dl:
+            return
+        if getattr(self, '_log_download_active', False):
+            self._log("[download] Another download is running")
+            return
+        h = self._current_log_host()
+        if not h:
+            return
+        self._log_download_active = True
+        self.log_status.setText("● Downloading...")
+        self.log_status.setStyleSheet("color:#fdd835;font-weight:bold;font-size:13px;")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        if hasattr(self, 'log_download_selected_btn'):
+            self.log_download_selected_btn.setEnabled(False)
+        self.log_connect_btn.setEnabled(False)
+        self.log_refresh_btn.setEnabled(False)
+        self._log_dl_worker = LogDownloadWorker(h["host"], h.get("port",22), h["user"], h.get("pwd",""), files_to_dl, save_dir)
         self._log_dl_worker.log.connect(self._log)
-        self._log_dl_worker.done.connect(lambda: self._log("[download] Done"))
-        self._log_dl_worker.error.connect(lambda e: self._log(f"[error] {e}"))
+        self._log_dl_worker.progress.connect(self.progress_bar.setValue)
+        self._log_dl_worker.done.connect(self._on_log_download_done)
+        self._log_dl_worker.error.connect(self._on_log_download_error)
         self._log_dl_worker.start()
+
+    def _finish_log_download_ui(self, ok):
+        self._log_download_active = False
+        self.progress_bar.setVisible(False)
+        self.log_connect_btn.setEnabled(True)
+        self.log_refresh_btn.setEnabled(True)
+        if hasattr(self, 'log_download_selected_btn'):
+            self.log_download_selected_btn.setEnabled(bool(getattr(self, '_log_file_list', [])))
+        self.log_status.setText("● Connected" if ok else "● Error")
+        self.log_status.setStyleSheet("color:#27ae60;font-weight:bold;font-size:13px;" if ok else "color:#e74c3c;font-weight:bold;font-size:13px;")
+
+    def _on_log_download_done(self, message):
+        self._log(f"[download] {message}")
+        self._finish_log_download_ui(True)
+
+    def _on_log_download_error(self, message):
+        self._log(f"[error] {message}")
+        self._finish_log_download_ui(False)
 
     def _get_log_selected_rows(self):
         rows = set()
@@ -1746,32 +1991,109 @@ class CaptureWorker(QThread):
         self.host = host; self.port = int(port); self.user = user; self.pwd = pwd
         self.cmd = cmd; self.remote_path = remote_path; self.local_path = local_path
         self.duration = int(duration); self.compress = compress
+        self._last_monitor_ok = None
     def _ssh(self):
         c = paramiko.SSHClient(); c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        c.connect(self.host, self.port, self.user, self.pwd, timeout=10); return c
+        c.connect(self.host, self.port, self.user, self.pwd, timeout=10, banner_timeout=10, auth_timeout=10)
+        transport = c.get_transport()
+        if transport:
+            transport.set_keepalive(15)
+        return c
+    def _ssh_exec_retry(self, cmd, timeout=10, retries=12, delay=5):
+        last_err = None
+        for attempt in range(1, retries + 1):
+            try:
+                return self._ssh_exec(cmd, timeout=timeout)
+            except Exception as e:
+                last_err = e
+                if attempt < retries:
+                    self.log.emit(f"[tcpdump] reconnect {attempt}/{retries}: {self._err_text(e)}")
+                    time.sleep(delay)
+        raise last_err
+    def _ssh_fire_and_forget(self, cmd, timeout=5):
+        c = self._ssh()
+        try:
+            chan = c.get_transport().open_session(); chan.settimeout(timeout)
+            chan.exec_command(cmd)
+            time.sleep(0.5)
+            chan.close()
+        finally:
+            c.close()
+    def _ssh_fire_retry(self, cmd, timeout=5, retries=12, delay=5):
+        last_err = None
+        for attempt in range(1, retries + 1):
+            try:
+                self._ssh_fire_and_forget(cmd, timeout=timeout)
+                return
+            except Exception as e:
+                last_err = e
+                if attempt < retries:
+                    self.log.emit(f"[tcpdump] reconnect before start {attempt}/{retries}: {self._err_text(e)}")
+                    time.sleep(delay)
+        raise last_err
+    def _err_text(self, exc):
+        text = str(exc).strip()
+        return text or exc.__class__.__name__
+    def _download_retry(self, remote_path, local_path, retries=12, delay=5):
+        last_err = None
+        for attempt in range(1, retries + 1):
+            c = None
+            try:
+                c = self._ssh(); SCPClient(c.get_transport()).get(remote_path, local_path); c.close()
+                return
+            except Exception as e:
+                last_err = e
+                try:
+                    if c: c.close()
+                except: pass
+                if attempt < retries:
+                    self.log.emit(f"[tcpdump] reconnect for download {attempt}/{retries}: {self._err_text(e)}")
+                    time.sleep(delay)
+        raise last_err
+    def _match_tcpdump(self):
+        out, _ = self._ssh_exec(_remote_tcpdump_match_cmd(self.remote_path), timeout=5)
+        return out
     def run(self):
         try:
             self.log.emit(f"[tcpdump] Execute: {self.cmd}")
-            self._ssh_exec("mkdir -p /opt/tar")
-            self._ssh_nohup(f"nohup {self.cmd} > /dev/null 2>&1 &")
+            self._ssh_exec_retry("mkdir -p /opt/tar")
+            self._ssh_fire_retry(f"nohup {self.cmd} </dev/null >/dev/null 2>&1 &")
             self.log.emit(f"[tcpdump] Capturing {self.duration}s ...")
             for i in range(self.duration):
                 time.sleep(1); self.progress.emit(int((i+1)*100/self.duration))
+                if i == 0 or (i + 1) % 5 == 0:
+                    try:
+                        procs = self._match_tcpdump()
+                        if self._last_monitor_ok is not True:
+                            self.log.emit("[tcpdump] control connection ready (root shell)")
+                        if procs:
+                            self.log.emit(f"[tcpdump] matched process: {procs.splitlines()[0]}")
+                        else:
+                            self.log.emit("[tcpdump] process not found; stop will still collect the pcap if it exists")
+                        self._last_monitor_ok = True
+                    except Exception as e:
+                        if self._last_monitor_ok is not False:
+                            self.log.emit(f"[tcpdump] control connection lost, reconnecting in background: {self._err_text(e)}")
+                        self._last_monitor_ok = False
             self.log.emit("[tcpdump] Stopping capture")
-            self._ssh_exec(f"pkill -f {_shell_quote('tcpdump .* -w ' + self.remote_path)} 2>/dev/null || true; sleep 2")
-            out, _ = self._ssh_exec(f"test -f {self.remote_path} && echo OK || echo MISSING")
+            self._ssh_exec_retry(_remote_tcpdump_kill_cmd(self.remote_path) + "; sleep 2")
+            out, _ = self._ssh_exec_retry(f"test -f {self.remote_path} && echo OK || echo MISSING")
             if out != "OK":
                 raise RuntimeError(f"File not found: {self.remote_path}")
             dl_path, dl_local = self.remote_path, self.local_path
             if self.compress:
                 self.log.emit(f"[compress] gzip {self.remote_path}")
-                self._ssh_exec(f"gzip -f {self.remote_path}", timeout=120)
+                self._ssh_exec_retry(f"gzip -f {self.remote_path}", timeout=120)
                 dl_path, dl_local = self.remote_path+".gz", self.local_path+".gz"
             self.log.emit(f"[download] {dl_path} -> {dl_local}")
-            c = self._ssh(); SCPClient(c.get_transport()).get(dl_path, dl_local); c.close()
-            self._ssh_nohup(f"rm -f {dl_path}")
+            self._download_retry(dl_path, dl_local)
+            self._ssh_exec_retry(f"rm -f {_shell_quote(dl_path)} {_shell_quote(self.remote_path + '.tcpdump.log')}")
             self.log.emit(f"[done] {dl_local}"); self.done.emit(dl_local)
         except Exception as e:
+            try:
+                self._ssh_exec_retry(f"rm -f {_shell_quote(self.remote_path + '.tcpdump.log')}", retries=1)
+            except Exception:
+                pass
             self.log.emit(f"[error] {str(e)}"); self.error.emit(str(e)); logger.exception("CaptureWorker error")
     def _ssh_exec(self, cmd, timeout=10):
         c = self._ssh(); chan = c.get_transport().open_session(); chan.settimeout(timeout)
@@ -1785,19 +2107,123 @@ class CaptureWorker(QThread):
         c = self._ssh(); chan = c.get_transport().open_session(); chan.exec_command(cmd); chan.close(); c.close()
 
 class CaptureStartWorker(QThread):
-    started = Signal(); error = Signal(str)
-    def __init__(self, host, port, user, pwd, cmd):
+    started = Signal(); control_ready = Signal(bool); log = Signal(str); error = Signal(str)
+    def __init__(self, host, port, user, pwd, cmd, remote_path=None):
         super().__init__()
         self.host = host; self.port = int(port); self.user = user; self.pwd = pwd; self.cmd = cmd
+        self.remote_path = remote_path
+        self._remote_path = remote_path
+        self._stop_requested = False
+        self._last_ready = None
+    def request_stop(self): self._stop_requested = True
     def _ssh(self):
         c = paramiko.SSHClient(); c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        c.connect(self.host, self.port, self.user, self.pwd, timeout=10); return c
-    def run(self):
+        c.connect(self.host, self.port, self.user, self.pwd, timeout=10, banner_timeout=10, auth_timeout=10)
+        transport = c.get_transport()
+        if transport:
+            transport.set_keepalive(15)
+        return c
+    def _ssh_exec(self, cmd, timeout=10):
+        c = self._ssh()
         try:
-            c = self._ssh(); chan = c.get_transport().open_session()
-            chan.exec_command(f"mkdir -p /opt/tar && nohup {self.cmd} > /dev/null 2>&1 &")
-            chan.close(); c.close(); self.started.emit()
-        except Exception as e: self.error.emit(str(e))
+            chan = c.get_transport().open_session(); chan.settimeout(timeout)
+            chan.exec_command(cmd)
+            out = chan.makefile("rb", -1).read().decode("utf-8", errors="replace").strip()
+            err = chan.makefile_stderr("rb", -1).read().decode("utf-8", errors="replace").strip()
+            return out, err
+        finally:
+            c.close()
+    def _ssh_fire_and_forget(self, cmd, timeout=5):
+        c = self._ssh()
+        try:
+            chan = c.get_transport().open_session(); chan.settimeout(timeout)
+            chan.exec_command(cmd)
+            time.sleep(0.5)
+            chan.close()
+        finally:
+            c.close()
+    def _err_text(self, exc):
+        text = str(exc).strip()
+        return text or exc.__class__.__name__
+    def _set_ready(self, ready):
+        self.setProperty("_control_ready", ready)
+        if self._last_ready is not ready:
+            self.control_ready.emit(ready)
+            self._last_ready = ready
+    def _match_tcpdump(self):
+        remote_path = self.remote_path or getattr(self, "_remote_path", "")
+        if not remote_path:
+            out, _ = self._ssh_exec("for p in $(pgrep -x tcpdump 2>/dev/null); do ps -o pid=,args= -p \"$p\"; done", timeout=5)
+            return out
+        out, _ = self._ssh_exec(_remote_tcpdump_match_cmd(remote_path), timeout=5)
+        return out
+    def _start_or_attach(self):
+        procs = self._match_tcpdump()
+        if procs:
+            return procs
+        log_path = f"{self.remote_path}.tcpdump.log"
+        out, err = self._ssh_exec(
+            f"mkdir -p /opt/tar; rm -f {_shell_quote(log_path)}; "
+            f"nohup {self.cmd} </dev/null > {_shell_quote(log_path)} 2>&1 & echo $!",
+            timeout=8,
+        )
+        pid = (out or "").strip().splitlines()[-1:] or [""]
+        if pid[0]:
+            self.log.emit(f"[tcpdump] start pid: {pid[0]}")
+        if err:
+            self.log.emit(f"[tcpdump] start stderr: {err}")
+        for _ in range(5):
+            time.sleep(1)
+            procs = self._match_tcpdump()
+            if procs:
+                return procs
+        exists, _ = self._ssh_exec(f"test -f {_shell_quote(self.remote_path)} && echo OK || echo MISSING", timeout=5)
+        log_out, _ = self._ssh_exec(f"test -f {_shell_quote(log_path)} && tail -80 {_shell_quote(log_path)} || true", timeout=5)
+        detail = log_out.strip() or f"pcap={exists.strip() or 'UNKNOWN'}"
+        raise RuntimeError(f"tcpdump did not start or exited early: {detail}")
+    def run(self):
+        started_emitted = False
+        last_proc_log = 0
+        last_state_log = None
+        self.log.emit("[tcpdump] connecting root shell")
+        try:
+            while not self._stop_requested:
+                try:
+                    procs = self._start_or_attach() if not started_emitted else self._match_tcpdump()
+                    self._set_ready(True)
+                    if not started_emitted:
+                        self.started.emit()
+                        started_emitted = True
+                        self.log.emit("[tcpdump] capture control ready")
+                    now = time.time()
+                    if now - last_proc_log >= 10:
+                        if procs:
+                            self.log.emit(f"[tcpdump] matched process: {procs.splitlines()[0]}")
+                        else:
+                            self.log.emit("[tcpdump] connected, but tcpdump process is not matched")
+                        last_proc_log = now
+                    last_state_log = "ready"
+                    for _ in range(2):
+                        if self._stop_requested:
+                            break
+                        time.sleep(1)
+                except Exception as e:
+                    self._set_ready(False)
+                    msg = self._err_text(e)
+                    if msg.startswith("tcpdump did not start"):
+                        self.error.emit(msg)
+                        return
+                    if last_state_log != msg:
+                        self.log.emit(f"[tcpdump] control connection lost, reconnecting: {msg}")
+                        last_state_log = msg
+                    for _ in range(2):
+                        if self._stop_requested:
+                            break
+                        time.sleep(1)
+        except Exception as e:
+            self.error.emit(self._err_text(e))
+        finally:
+            self._set_ready(False)
 
 class CaptureStopWorker(QThread):
     log = Signal(str); done = Signal(str); error = Signal(str)
@@ -1807,39 +2233,86 @@ class CaptureStopWorker(QThread):
         self.remote_path = remote_path; self.local_path = local_path; self.compress = compress
     def _ssh(self):
         c = paramiko.SSHClient(); c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        c.connect(self.host, self.port, self.user, self.pwd, timeout=10); return c
+        c.connect(self.host, self.port, self.user, self.pwd, timeout=10, banner_timeout=10, auth_timeout=10)
+        transport = c.get_transport()
+        if transport:
+            transport.set_keepalive(15)
+        return c
+    def _exec_retry(self, cmd, timeout=10, retries=12, delay=5):
+        last_err = None
+        for attempt in range(1, retries + 1):
+            c = None
+            try:
+                c = self._ssh(); chan = c.get_transport().open_session(); chan.settimeout(timeout)
+                chan.exec_command(cmd)
+                out = chan.makefile("rb",-1).read().decode("utf-8",errors="replace").strip()
+                err = chan.makefile_stderr("rb",-1).read().decode("utf-8",errors="replace").strip()
+                chan.close(); c.close()
+                return out, err
+            except Exception as e:
+                last_err = e
+                try:
+                    if c: c.close()
+                except: pass
+                if attempt < retries:
+                    self.log.emit(f"[tcpdump] reconnect before stop {attempt}/{retries}: {e}")
+                    time.sleep(delay)
+        raise last_err
+    def _download_retry(self, remote_path, local_path, retries=12, delay=5):
+        last_err = None
+        for attempt in range(1, retries + 1):
+            c = None
+            try:
+                c = self._ssh(); SCPClient(c.get_transport()).get(remote_path, local_path); c.close()
+                return
+            except Exception as e:
+                last_err = e
+                try:
+                    if c: c.close()
+                except: pass
+                if attempt < retries:
+                    self.log.emit(f"[tcpdump] reconnect for download {attempt}/{retries}: {e}")
+                    time.sleep(delay)
+        raise last_err
     def run(self):
         try:
             self.log.emit("[tcpdump] Stopping capture")
-            c = self._ssh(); chan = c.get_transport().open_session()
-            chan.exec_command(f"pkill -f {_shell_quote('tcpdump .* -w ' + self.remote_path)} 2>/dev/null || true; sleep 2")
-            chan.close(); c.close()
-            c = self._ssh(); chan = c.get_transport().open_session()
-            chan.exec_command(f"test -f {self.remote_path} && echo OK || echo MISSING")
-            out = chan.makefile("rb",-1).read().decode().strip(); chan.close(); c.close()
+            procs, _ = self._exec_retry(_remote_tcpdump_match_cmd(self.remote_path))
+            if procs:
+                self.log.emit(f"[tcpdump] matched process before stop: {procs.splitlines()[0]}")
+            self._exec_retry(_remote_tcpdump_kill_cmd(self.remote_path) + "; sleep 2")
+            out, _ = self._exec_retry(f"test -f {self.remote_path} && echo OK || echo MISSING")
             if out != "OK": raise RuntimeError(f"File not found: {self.remote_path}")
             dl_path, dl_local = self.remote_path, self.local_path
             if self.compress:
                 self.log.emit(f"[compress] gzip {self.remote_path}")
-                c = self._ssh(); chan = c.get_transport().open_session()
-                chan.exec_command(f"gzip -f {self.remote_path}"); chan.close(); c.close()
+                self._exec_retry(f"gzip -f {self.remote_path}", timeout=120)
                 dl_path, dl_local = self.remote_path+".gz", self.local_path+".gz"
             self.log.emit(f"[download] {dl_path} -> {dl_local}")
-            c = self._ssh(); SCPClient(c.get_transport()).get(dl_path, dl_local); c.close()
-            c = self._ssh(); chan = c.get_transport().open_session()
-            chan.exec_command(f"rm -f {dl_path}"); chan.close(); c.close()
+            self._download_retry(dl_path, dl_local)
+            self._exec_retry(f"rm -f {_shell_quote(dl_path)} {_shell_quote(self.remote_path + '.tcpdump.log')}")
             self.log.emit(f"[done] {dl_local}"); self.done.emit(dl_local)
         except Exception as e:
+            try:
+                self._exec_retry(f"rm -f {_shell_quote(self.remote_path + '.tcpdump.log')}", retries=1)
+            except Exception:
+                pass
             self.log.emit(f"[error] {str(e)}"); self.error.emit(str(e))
 
 class SBCMCaptureWorker(QThread):
-    log = Signal(str); progress = Signal(int); done = Signal(str); error = Signal(str)
+    log = Signal(str); progress = Signal(int); done = Signal(str); control_ready = Signal(bool); error = Signal(str)
     def __init__(self, host, port, user, pwd, local_path, duration=None):
         super().__init__()
         self.host = host; self.port = int(port); self.user = user; self.pwd = pwd
         self.local_path = local_path; self.duration = int(duration) if duration is not None else None
         self._stop_requested = False; self._chan = None; self._ssh = None
+        self._last_ready = None
     def request_stop(self): self._stop_requested = True
+    def _set_ready(self, ready):
+        self.setProperty("_control_ready", ready)
+        if self._last_ready is not ready:
+            self.control_ready.emit(ready)
+            self._last_ready = ready
     def _recv_all(self, chan):
         data = b""
         while chan.recv_ready():
@@ -1864,15 +2337,54 @@ class SBCMCaptureWorker(QThread):
         txt = data.decode("utf-8",errors="replace")
         self.log.emit(f"[SBCM] [expect] '{expected}' timeout, recv={txt[-300:]}")
         raise TimeoutError(f"Expected '{expected}' not found. Got: {txt[-300:]}")
+    def _expect_any(self, chan, expected_list, timeout=30):
+        data = b""; start = time.time()
+        while time.time()-start < timeout:
+            if chan.recv_ready():
+                chunk = chan.recv(4096)
+                if not chunk: break
+                data += chunk
+                txt = data.decode("utf-8",errors="replace")
+                for expected in expected_list:
+                    if expected in txt:
+                        self.log.emit(f"[SBCM] [expect] '{expected}' matched")
+                        return expected, txt
+            elif chan.exit_status_ready(): break
+            else: time.sleep(0.1)
+        txt = data.decode("utf-8",errors="replace")
+        labels = ", ".join(repr(x) for x in expected_list)
+        self.log.emit(f"[SBCM] [expect] any({labels}) timeout, recv={txt[-300:]}")
+        raise TimeoutError(f"Expected one of {labels} not found. Got: {txt[-300:]}")
     def _send_cmd(self, chan, text, label=None):
         label = label or text.rstrip("\n")
         self.log.emit(f"[SBCM] [send] {label}"); chan.send(text)
     def _telnet_and_diagnose(self, chan):
         self._recv_all(chan)
         self._send_cmd(chan, "telnet 127.0.0.1\n")
-        self._expect(chan, "[USERNAME]:"); self._send_cmd(chan, "admin\n", "admin (username)")
-        self._expect(chan, "[PASSWORD]:"); self._send_cmd(chan, "admin\n", "admin (password)")
-        self._expect(chan, "NuBiz>>"); self._send_cmd(chan, "cm diagnose\n"); self._expect(chan, "NuBiz$$")
+        for _ in range(3):
+            self._expect(chan, "[USERNAME]:")
+            self._send_cmd(chan, "admin\n", "admin (username)")
+            self._expect(chan, "[PASSWORD]:")
+            self._send_cmd(chan, "admin\n", "admin (password)")
+            for _ in range(4):
+                matched, _ = self._expect_any(
+                    chan,
+                    ["NuBiz>>", "Kick it out", "Y/N", "[USERNAME]:"],
+                    timeout=30,
+                )
+                if matched == "NuBiz>>":
+                    self._send_cmd(chan, "cm diagnose\n")
+                    self._expect(chan, "NuBiz$$")
+                    return
+                if matched in ("Kick it out", "Y/N"):
+                    self._send_cmd(chan, "Y\n", "kick existing admin session Y")
+                    continue
+                if matched == "[USERNAME]:":
+                    self._send_cmd(chan, "admin\n", "admin (username)")
+                    self._expect(chan, "[PASSWORD]:")
+                    self._send_cmd(chan, "admin\n", "admin (password)")
+                    continue
+        raise TimeoutError("SBCM telnet login failed: NuBiz>> not reached")
     def _stop_capture(self, chan):
         self._send_cmd(chan, "debug dp 0x912\n")
         self._expect(chan, "<para1>"); self._send_cmd(chan, "\n","enter para1")
@@ -1880,14 +2392,99 @@ class SBCMCaptureWorker(QThread):
         self._expect(chan, "<para3>"); self._send_cmd(chan, "\n","enter para3")
         self._expect(chan, "<para4>"); self._send_cmd(chan, "\n","enter para4")
         self._expect(chan, "End of Packet Capture", timeout=120)
+    def _close_control(self):
+        if self._chan:
+            try: self._chan.close()
+            except: pass
+        if self._ssh:
+            try: self._ssh.close()
+            except: pass
+        self._chan = None; self._ssh = None
+        self._set_ready(False)
+    def _connect_control(self, retries=12, delay=5):
+        last_err = None
+        for attempt in range(1, retries + 1):
+            try:
+                self._close_control()
+                self.log.emit(f"[SBCM] Connecting {self.host}:{self.port}")
+                c = paramiko.SSHClient(); c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                c.connect(self.host, self.port, self.user, self.pwd, timeout=10, banner_timeout=10, auth_timeout=10)
+                transport = c.get_transport()
+                if transport:
+                    transport.set_keepalive(15)
+                chan = c.invoke_shell(); chan.settimeout(30)
+                self._ssh = c; self._chan = chan
+                time.sleep(1); self._recv_all(chan)
+                self._telnet_and_diagnose(chan)
+                self._set_ready(True)
+                self.log.emit("[SBCM] NuBiz$$ control view ready")
+                return chan
+            except Exception as e:
+                last_err = e
+                self._close_control()
+                if attempt < retries:
+                    self.log.emit(f"[SBCM] reconnect {attempt}/{retries}: {e}")
+                    time.sleep(delay)
+        raise last_err
+    def _ensure_control(self):
+        chan = self._chan
+        if not chan or not chan.active or chan.exit_status_ready():
+            self.log.emit("[SBCM] control session lost, reconnecting")
+            return self._connect_control()
+        try:
+            if chan.recv_ready():
+                chan.recv(4096)
+            chan.send("\n")
+            return chan
+        except Exception as e:
+            self.log.emit(f"[SBCM] keepalive failed, reconnecting: {e}")
+            return self._connect_control()
+    def _ssh_exec_retry(self, cmd, timeout=10, retries=12, delay=5):
+        last_err = None
+        for attempt in range(1, retries + 1):
+            c = None
+            try:
+                c = paramiko.SSHClient(); c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                c.connect(self.host, self.port, self.user, self.pwd, timeout=10, banner_timeout=10, auth_timeout=10)
+                transport = c.get_transport()
+                if transport:
+                    transport.set_keepalive(15)
+                chan = transport.open_session(); chan.settimeout(timeout)
+                chan.exec_command(cmd)
+                out = chan.makefile("rb",-1).read().decode("utf-8",errors="replace").strip()
+                err = chan.makefile_stderr("rb",-1).read().decode("utf-8",errors="replace").strip()
+                chan.close(); c.close()
+                return out, err
+            except Exception as e:
+                last_err = e
+                try:
+                    if c: c.close()
+                except: pass
+                if attempt < retries:
+                    self.log.emit(f"[SBCM] reconnect for file operation {attempt}/{retries}: {e}")
+                    time.sleep(delay)
+        raise last_err
+    def _download_retry(self, remote_path, local_path, retries=12, delay=5):
+        last_err = None
+        for attempt in range(1, retries + 1):
+            c = None
+            try:
+                c = paramiko.SSHClient(); c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                c.connect(self.host, self.port, self.user, self.pwd, timeout=10, banner_timeout=10, auth_timeout=10)
+                SCPClient(c.get_transport()).get(remote_path, local_path); c.close()
+                return
+            except Exception as e:
+                last_err = e
+                try:
+                    if c: c.close()
+                except: pass
+                if attempt < retries:
+                    self.log.emit(f"[SBCM] reconnect for download {attempt}/{retries}: {e}")
+                    time.sleep(delay)
+        raise last_err
     def run(self):
         try:
-            self.log.emit(f"[SBCM] Connecting {self.host}:{self.port}")
-            c = paramiko.SSHClient(); c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            c.connect(self.host, self.port, self.user, self.pwd, timeout=10); self._ssh = c
-            chan = c.invoke_shell(); chan.settimeout(30); self._chan = chan
-            time.sleep(1); self._recv_all(chan)
-            self._telnet_and_diagnose(chan)
+            chan = self._connect_control()
             self._send_cmd(chan, "debug dp 0x911\n")
             self._expect(chan, "<para1>"); self._send_cmd(chan, "\n","enter para1")
             self._expect(chan, "<para2>"); self._send_cmd(chan, "\n","enter para2")
@@ -1903,59 +2500,53 @@ class SBCMCaptureWorker(QThread):
                 else:
                     self.progress.emit(50)
                     if self._stop_requested: break
-                if not chan.active: raise RuntimeError("SSH channel closed")
-                if chan.recv_ready(): chan.recv(4096)
                 if time.time()-last_keepalive >= 30:
-                    chan.send("\n"); last_keepalive = time.time()
+                    chan = self._ensure_control(); last_keepalive = time.time()
                     self.log.emit("[SBCM] keepalive sent")
                 time.sleep(1)
-            for attempt in range(2):
-                try: self._stop_capture(chan); break
-                except Exception:
-                    if attempt == 0:
-                        self.log.emit("[SBCM] Session lost, re-telnet...")
-                        self._telnet_and_diagnose(chan)
-                    else: raise
+            for attempt in range(1, 13):
+                try:
+                    chan = self._ensure_control()
+                    self._stop_capture(chan); break
+                except Exception as e:
+                    self._set_ready(False)
+                    if attempt >= 12:
+                        raise
+                    self.log.emit(f"[SBCM] stop command failed, reconnecting {attempt}/12: {e}")
+                    chan = self._connect_control()
             self.log.emit("[SBCM] Capture stopped, waiting for flush..."); time.sleep(3)
-            self._send_cmd(chan, "exit\n"); self._expect(chan, "Y/N")
-            self._send_cmd(chan, "Y\n", "exit confirm Y"); time.sleep(2)
-            self._recv_all(chan); chan.close(); c.close()
+            try:
+                self._send_cmd(chan, "exit\n"); self._expect(chan, "Y/N")
+                self._send_cmd(chan, "Y\n", "exit confirm Y"); time.sleep(2)
+                self._recv_all(chan)
+            except Exception as e:
+                self.log.emit(f"[SBCM] exit diagnose skipped: {e}")
+            self._close_control()
             self.log.emit("[SBCM] Locating pdump folder")
-            c2 = paramiko.SSHClient(); c2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            c2.connect(self.host, self.port, self.user, self.pwd, timeout=10)
-            transport = c2.get_transport()
             remote_folder = ""
             for retry in range(10):
-                s = transport.open_session(); s.exec_command("ls -td /mnt/hfs1/PROGRAM/pdump/pdump* 2>/dev/null | head -1")
-                out = s.makefile("rb",-1).read(); s.close()
-                remote_folder = out.decode("utf-8",errors="replace").strip()
+                out, _ = self._ssh_exec_retry("ls -td /mnt/hfs1/PROGRAM/pdump/pdump* 2>/dev/null | head -1")
+                remote_folder = out.strip()
                 if remote_folder:
-                    sc = transport.open_session(); sc.exec_command(f"ls -A {remote_folder} 2>/dev/null | head -5")
-                    oc = sc.makefile("rb",-1).read().decode("utf-8",errors="replace").strip(); sc.close()
+                    oc, _ = self._ssh_exec_retry(f"ls -A {remote_folder} 2>/dev/null | head -5")
                     if oc: break
                 time.sleep(2)
             if not remote_folder: raise RuntimeError("SBCM: pdump folder not found!")
             folder_name = remote_folder.rstrip("/").split("/")[-1]
             remote_tar = f"/opt/tar/{folder_name}.tar.gz"
             self.log.emit(f"[SBCM] Packing {remote_folder}")
-            s2 = transport.open_session(); s2.exec_command(f"tar czf {remote_tar} -C /mnt/hfs1/PROGRAM/pdump {folder_name} && stat --format=%s {remote_tar}")
-            o2 = s2.makefile("rb",-1).read().decode("utf-8",errors="replace").strip(); s2.close()
+            o2, _ = self._ssh_exec_retry(f"tar czf {remote_tar} -C /mnt/hfs1/PROGRAM/pdump {folder_name} && stat --format=%s {remote_tar}", timeout=120)
             if not o2 or o2=="0": raise RuntimeError(f"SBCM: packed file empty! ({remote_tar})")
             self.log.emit(f"[SBCM] Packed size: {o2} bytes")
             lp = self.local_path+".tar.gz"
             self.log.emit(f"[SBCM] Downloading {remote_tar} -> {lp}")
-            SCPClient(c2.get_transport()).get(remote_tar, lp)
-            s3 = transport.open_session(); s3.exec_command(f"rm -f {remote_tar}"); s3.close(); c2.close()
+            self._download_retry(remote_tar, lp)
+            self._ssh_exec_retry(f"rm -f {remote_tar}")
             self.progress.emit(100); self.log.emit(f"[done] {lp}"); self.done.emit(lp)
         except Exception as e:
             emsg = str(e); self.log.emit(f"[error] {emsg}"); self.error.emit(emsg); logger.exception("SBCMCaptureWorker error")
         finally:
-            if self._chan:
-                try: self._chan.close()
-                except: pass
-            if self._ssh:
-                try: self._ssh.close()
-                except: pass
+            self._close_control()
 
 # ═══════════════════════════════════════════════
 #  Upgrade Workers (from IMS_NE_Upgrade)
@@ -2502,24 +3093,130 @@ class LogViewerWorker(QThread):
         except Exception as e: self.log.emit(f"Error: {e}"); self.done.emit()
 
 class LogDownloadWorker(QThread):
-    log = Signal(str); done = Signal(); error = Signal(str)
+    log = Signal(str); progress = Signal(int); done = Signal(str); error = Signal(str)
     def __init__(self, host, port, user, pwd, files, save_dir):
         super().__init__()
         self.host = host; self.port = int(port); self.user = user; self.pwd = pwd
         self.files = files; self.save_dir = save_dir
-    def run(self):
+
+    def _exec(self, c, cmd, timeout=None):
+        _, stdout, stderr = c.exec_command(cmd, timeout=timeout)
+        out = stdout.read().decode("utf-8", errors="replace")
+        err = stderr.read().decode("utf-8", errors="replace")
+        rc = stdout.channel.recv_exit_status()
+        return rc, out, err
+
+    def _items(self):
+        items = []
+        used = {}
+        for item in self.files:
+            if isinstance(item, dict):
+                rp = item.get("remote_path") or item.get("path") or ""
+                name = item.get("filename") or os.path.basename(rp.rstrip("/"))
+            else:
+                rp = str(item)
+                name = os.path.basename(rp.rstrip("/"))
+            rp = rp.strip()
+            name = (name or "download").strip().replace("/", "_").replace("\\", "_")
+            if not rp:
+                continue
+            base, ext = os.path.splitext(name)
+            idx = used.get(name, 0)
+            used[name] = idx + 1
+            if idx:
+                name = f"{base}_{idx + 1}{ext}"
+            items.append((rp, name))
+        return items
+
+    def _remote_is_dir(self, c, remote_path):
+        rc, out, _ = self._exec(c, f"test -d {_shell_quote(remote_path)} && echo DIR || echo FILE", timeout=10)
+        return rc == 0 and out.strip() == "DIR"
+
+    def _safe_extract(self, archive_path):
+        target = os.path.abspath(self.save_dir)
+        with tarfile.open(archive_path, "r:gz") as tf:
+            for member in tf.getmembers():
+                member_path = os.path.abspath(os.path.join(target, member.name))
+                if member_path != target and not member_path.startswith(target + os.sep):
+                    raise RuntimeError(f"Unsafe archive member: {member.name}")
+            tf.extractall(target)
+
+    def _download_archive(self, c, items):
+        batch_id = f"ims_log_dl_{int(time.time())}_{threading.get_ident()}"
+        remote_dir = f"/tmp/{batch_id}"
+        remote_archive = f"/tmp/{batch_id}.tar.gz"
+        local_archive = None
         try:
+            rc, _, err = self._exec(c, f"rm -rf {_shell_quote(remote_dir)} {_shell_quote(remote_archive)}; mkdir -p {_shell_quote(remote_dir)}", timeout=20)
+            if rc != 0:
+                raise RuntimeError(err.strip() or "Create remote temp directory failed")
+            total = len(items)
+            for idx, (rp, name) in enumerate(items, 1):
+                link_path = posixpath.join(remote_dir, name)
+                rc, _, err = self._exec(c, f"ln -s {_shell_quote(rp)} {_shell_quote(link_path)}", timeout=20)
+                if rc != 0:
+                    raise RuntimeError(err.strip() or f"Prepare remote file failed: {rp}")
+                self.progress.emit(5 + int(idx / max(total, 1) * 20))
+            self.log.emit(f"[download] packaging {total} item(s) on remote host")
+            rc, _, err = self._exec(c, f"tar -C {_shell_quote(remote_dir)} -czhf {_shell_quote(remote_archive)} .", timeout=600)
+            if rc != 0:
+                raise RuntimeError(err.strip() or "Remote archive failed")
+            self.progress.emit(45)
+            fd, local_archive = tempfile.mkstemp(prefix="ims_logs_", suffix=".tar.gz", dir=self.save_dir)
+            os.close(fd)
+            self.log.emit(f"[download] {remote_archive} -> {local_archive}")
+            sftp = c.open_sftp()
+            try:
+                sftp.get(remote_archive, local_archive)
+            finally:
+                sftp.close()
+            self.progress.emit(80)
+            self.log.emit(f"[download] extracting to {self.save_dir}")
+            self._safe_extract(local_archive)
+            self.progress.emit(95)
+        finally:
+            try:
+                self._exec(c, f"rm -rf {_shell_quote(remote_dir)} {_shell_quote(remote_archive)}", timeout=20)
+            except Exception:
+                pass
+            if local_archive and os.path.exists(local_archive):
+                try: os.remove(local_archive)
+                except Exception: pass
+
+    def _download_single(self, c, remote_path, local_name):
+        lp = os.path.join(self.save_dir, local_name)
+        os.makedirs(os.path.dirname(lp), exist_ok=True)
+        self.log.emit(f"[download] {remote_path} -> {lp}")
+        sftp = c.open_sftp()
+        try:
+            sftp.get(remote_path, lp)
+        finally:
+            sftp.close()
+        self.progress.emit(100)
+
+    def run(self):
+        c = None
+        try:
+            os.makedirs(self.save_dir, exist_ok=True)
+            items = self._items()
+            if not items:
+                self.done.emit("No files to download")
+                return
             c = paramiko.SSHClient(); c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            c.connect(self.host, self.port, self.user, self.pwd, timeout=5)
-            for f in self.files:
-                if isinstance(f, dict):
-                    rp = f["remote_path"]; lp = os.path.join(self.save_dir, f["filename"])
-                else:
-                    rp = f; lp = os.path.join(self.save_dir, os.path.basename(f))
-                self.log.emit(f"[download] {rp} -> {lp}")
-                SCPClient(c.get_transport()).get(rp, lp, recursive=True)
-            c.close(); self.done.emit()
+            c.connect(self.host, self.port, self.user, self.pwd, timeout=10)
+            self.progress.emit(3)
+            if len(items) == 1 and not self._remote_is_dir(c, items[0][0]):
+                self._download_single(c, items[0][0], items[0][1])
+            else:
+                self._download_archive(c, items)
+                self.progress.emit(100)
+            self.done.emit(f"Done ({len(items)} item{'s' if len(items) != 1 else ''})")
         except Exception as e: self.error.emit(str(e))
+        finally:
+            try:
+                if c: c.close()
+            except Exception:
+                pass
 
 class NEServiceWorker(QThread):
     log = Signal(str); service_finished = Signal(bool, str)
