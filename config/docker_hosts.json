@@ -61,5 +61,12 @@
     "user": "root",
     "pwd": "Genew@123",
     "desc": "CTG-SERVER2"
+  },
+  {
+    "host": "10.63.33.2",
+    "port": 22,
+    "user": "root",
+    "pwd": "Genew@123",
+    "desc": "ringtech-测试机"
   }
 ]
