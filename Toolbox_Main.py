@@ -2,18 +2,56 @@
 """
 工具箱主程序 (PySide6)
 """
-import sys, os, json, importlib, logging
+import sys, os, json, importlib, logging, shutil, traceback
 from datetime import datetime
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QListWidget,
     QListWidgetItem, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
-    QDialog)
+    QDialog, QMessageBox)
 from PySide6.QtCore import QSize, Qt
 
-PATH = getattr(sys, '_MEIPASS', os.path.dirname(__file__))
-TOOLS_CFG = os.path.join(PATH, "config", "tools.json")
+APP_DIR = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+RESOURCE_DIR = getattr(sys, '_MEIPASS', APP_DIR)
+CONFIG_DIR = os.path.join(APP_DIR, "config")
+
+
+def _bundled_config_path(filename):
+    return os.path.join(RESOURCE_DIR, "config", filename)
+
+
+def _config_path(filename, required=False):
+    paths = [
+        os.path.join(CONFIG_DIR, filename),
+        _bundled_config_path(filename),
+    ]
+    for path in paths:
+        if os.path.exists(path):
+            return path
+    if required:
+        raise FileNotFoundError(
+            f"Missing config/{filename}. Put the config folder next to the exe, "
+            f"or include it when packaging."
+        )
+    return paths[0]
+
+
+def _ensure_runtime_config():
+    bundled_dir = os.path.join(RESOURCE_DIR, "config")
+    if not getattr(sys, 'frozen', False) or not os.path.isdir(bundled_dir):
+        return
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    for name in os.listdir(bundled_dir):
+        src = os.path.join(bundled_dir, name)
+        dst = os.path.join(CONFIG_DIR, name)
+        if os.path.isfile(src) and not os.path.exists(dst):
+            shutil.copy2(src, dst)
+
+
+_ensure_runtime_config()
+PATH = APP_DIR
+TOOLS_CFG = _config_path("tools.json")
 TOOL_ICONS = ["🕐", "👤", "🔐", "🛠", "⚙", "📊", "🔧", "💻", "🌐", "📁"]
-VIS_CFG = os.path.join(PATH, "config", "tool_visibility.json")
-ORDER_CFG = os.path.join(PATH, "config", "tool_order.json")
+VIS_CFG = os.path.join(CONFIG_DIR, "tool_visibility.json")
+ORDER_CFG = os.path.join(CONFIG_DIR, "tool_order.json")
 tools = []
 tool_windows = []
 
@@ -21,7 +59,13 @@ tool_windows = []
 def import_cls(mod_name, cls_name):
     try:
         return getattr(importlib.import_module(mod_name), cls_name)
-    except:
+    except Exception:
+        logging.getLogger("toolbox").error(
+            "工具类加载失败: %s.%s\n%s",
+            mod_name,
+            cls_name,
+            traceback.format_exc(),
+        )
         return None
 
 
@@ -70,11 +114,24 @@ def _rebuild_item_widgets(tl, tools):
 
 
 def _save_order(tools):
+    os.makedirs(os.path.dirname(ORDER_CFG), exist_ok=True)
     json.dump(
         [t["name"] for t in tools],
         open(ORDER_CFG, "w", encoding="utf-8"),
         ensure_ascii=False, indent=2
     )
+
+
+def _load_json(path, default=None):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return default
+
+
+def _load_config_json(filename, default=None, required=False):
+    return _load_json(_config_path(filename, required=required), default)
 
 
 class ToolSettingsDialog(QDialog):
@@ -189,8 +246,19 @@ class ToolSettingsDialog(QDialog):
 
 
 if __name__ == "__main__":
-    cfgs = json.load(open(TOOLS_CFG, encoding="utf-8"))["tools"]
-    visible_map = json.load(open(VIS_CFG, encoding="utf-8")) if os.path.exists(VIS_CFG) else {}
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+    if not os.path.exists(TOOLS_CFG):
+        QMessageBox.critical(
+            None,
+            "Config Missing",
+            f"Cannot find config/tools.json.\n\nChecked:\n{CONFIG_DIR}\n{os.path.join(RESOURCE_DIR, 'config')}\n\n"
+            "Please copy the config folder next to the exe, or package it with --add-data config;config."
+        )
+        sys.exit(1)
+
+    cfgs = _load_json(TOOLS_CFG, {"tools": []})["tools"]
+    visible_map = _load_config_json("tool_visibility.json", default={}) or {}
 
     logger = logging.getLogger("toolbox")
     log_dir = os.path.join(PATH, "logs")
@@ -202,9 +270,6 @@ if __name__ == "__main__":
     logger.addHandler(fh)
     logger.setLevel(logging.INFO)
     logger.info("工具箱启动")
-
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
 
     w = QMainWindow()
     w.setWindowTitle("工具箱")
@@ -263,7 +328,7 @@ if __name__ == "__main__":
     for i, c in enumerate(cfgs):
         icon = c.get("icon", TOOL_ICONS[i % len(TOOL_ICONS)])
         tools.append({**c, "icon": icon})
-    order_list = json.load(open(ORDER_CFG, encoding="utf-8")) if os.path.exists(ORDER_CFG) else None
+    order_list = _load_config_json("tool_order.json", default=None)
     if order_list:
         name_to_tool = {t["name"]: t for t in tools}
         reordered = [name_to_tool[n] for n in order_list if n in name_to_tool]
@@ -375,6 +440,7 @@ if __name__ == "__main__":
             visible_map.update(new_map)
             name_to_tool = {t["name"]: t for t in tools}
             tools[:] = [name_to_tool[n] for n in new_order if n in name_to_tool]
+            os.makedirs(os.path.dirname(VIS_CFG), exist_ok=True)
             json.dump(visible_map, open(VIS_CFG, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
             _save_order(tools)
             rebuild_tool_list(tl, tools, visible_map)

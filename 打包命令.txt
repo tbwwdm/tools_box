@@ -1,3 +1,4 @@
+# Nuitka
 $all_modules = Get-ChildItem -Filter "*.py" | Where-Object { $_.Name -ne "Toolbox_Main.py" } | ForEach-Object { "--include-module=" + $_.BaseName }
 python -m nuitka Toolbox_Main.py `
     --standalone `
@@ -14,4 +15,32 @@ python -m nuitka Toolbox_Main.py `
     --jobs=8 `
     --include-data-dir=input=input `
     --include-data-dir=config=config `
+    --include-data-dir=assets=assets `
     $all_modules
+
+
+# PyInstaller onefile, recommended for PyCharm
+# Use the spec file because Toolbox_Main loads tools dynamically with importlib.
+pyinstaller --noconfirm --clean Toolbox_Main.spec
+
+
+# PyInstaller command-line alternative
+$hidden_modules = Get-ChildItem -Filter "*.py" | Where-Object { $_.Name -ne "Toolbox_Main.py" } | ForEach-Object { "--hidden-import=" + $_.BaseName }
+pyinstaller `
+    --noconfirm `
+    --clean `
+    --onefile `
+    --windowed `
+    --name Toolbox_Main `
+    --add-data "config;config" `
+    --add-data "input;input" `
+    --add-data "assets;assets" `
+    --hidden-import ssh_utils `
+    --hidden-import paramiko `
+    --hidden-import scp `
+    --hidden-import openpyxl `
+    --hidden-import pandas `
+    --hidden-import pymupdf `
+    --hidden-import fitz `
+    $hidden_modules `
+    Toolbox_Main.py
