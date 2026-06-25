@@ -54,17 +54,21 @@ VIS_CFG = os.path.join(CONFIG_DIR, "tool_visibility.json")
 ORDER_CFG = os.path.join(CONFIG_DIR, "tool_order.json")
 tools = []
 tool_windows = []
+last_import_error = ""
 
 
 def import_cls(mod_name, cls_name):
+    global last_import_error
+    last_import_error = ""
     try:
         return getattr(importlib.import_module(mod_name), cls_name)
     except Exception:
+        last_import_error = traceback.format_exc()
         logging.getLogger("toolbox").error(
             "工具类加载失败: %s.%s\n%s",
             mod_name,
             cls_name,
-            traceback.format_exc(),
+            last_import_error,
         )
         return None
 
@@ -416,11 +420,20 @@ if __name__ == "__main__":
         t = tools[row]
         if not t.get("module") or not t.get("class"):
             logger.warning(f"工具配置不完整: {t['name']}")
+            QMessageBox.warning(w, "Tool Config Error", f"Tool config is incomplete:\n{t['name']}")
             return
         logger.info(f"启动工具: {t['name']}")
         cls = import_cls(t["module"], t["class"])
         if cls is None:
             logger.error(f"工具类加载失败: {t['module']}.{t['class']}")
+            detail = last_import_error or "No traceback was captured."
+            QMessageBox.critical(
+                w,
+                "Tool Load Failed",
+                "Failed to load tool class:\n"
+                f"{t['module']}.{t['class']}\n\n"
+                f"{detail}"
+            )
             return
         try:
             tw = cls()
@@ -429,7 +442,13 @@ if __name__ == "__main__":
             tool_windows.append(tw)
             logger.info(f"工具启动成功: {t['name']}")
         except Exception as e:
-            logger.error(f"工具启动失败: {e}")
+            logger.error(f"工具启动失败: {e}\n{traceback.format_exc()}")
+            QMessageBox.critical(
+                w,
+                "Tool Start Failed",
+                f"Failed to start tool:\n{t['name']}\n\n{e}\n\n"
+                "Please check the latest log file for details."
+            )
 
     def open_settings():
         dlg = ToolSettingsDialog(tools, visible_map, w)

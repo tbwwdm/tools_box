@@ -4,7 +4,7 @@ Docker 远程管理工具  v2.12.1
 通过SSH连接远程服务器，管理Docker容器、网络等
 """
 
-import sys, os, logging, threading, time, json
+import sys, os, logging, threading, time, json, shlex
 from datetime import datetime
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
@@ -96,13 +96,14 @@ class DockerSSHWorker(QThread):
     output_ready = Signal(str)
     data_ready = Signal(dict)
 
-    def __init__(self, host, port, username, password, commands=None, parent=None):
+    def __init__(self, host, port, username, password, commands=None, parent=None, command_timeout=60):
         super().__init__(parent)
         self.host = host
         self.port = port
         self.username = username
         self.password = password
         self.commands = commands or []
+        self.command_timeout = command_timeout
         self._stopped = False
 
     def stop(self):
@@ -123,10 +124,11 @@ class DockerSSHWorker(QThread):
                     if self._stopped:
                         break
                     self.output_ready.emit(f"▶ 执行: {cmd}")
-                    stdin, stdout, stderr = client.exec_command(cmd, timeout=60)
+                    stdin, stdout, stderr = client.exec_command(cmd, timeout=self.command_timeout)
                     out = stdout.read().decode("utf-8", errors="replace").strip()
                     err = stderr.read().decode("utf-8", errors="replace").strip()
-                    results.append({"cmd": cmd, "stdout": out, "stderr": err})
+                    rc = stdout.channel.recv_exit_status()
+                    results.append({"cmd": cmd, "stdout": out, "stderr": err, "exit_status": rc})
                     if out:
                         for line in out.split("\n")[:5]:
                             self.output_ready.emit(f"  {line}")
@@ -3940,10 +3942,14 @@ class DockerManager(QWidget):
         self._load_progress_dlg.set_info(f"\U0001f4e5 \u52a0\u8f7d\u4e2d [{cur}/{total}]")
         self._load_progress_dlg.append_log(f"\u25b6 \u5f00\u59cb\u52a0\u8f7d [{cur}/{total}]: {f}")
         host, port, user, pwd = self.ssh_params
-        cmd = f"docker load -i {f}"
+        marker = f"===LOAD_{self._load_queue_idx}_RC:"
+        quoted_file = shlex.quote(f)
+        cmd = f"docker load -i {quoted_file}; rc=$?; echo '{marker}'$rc'==='; exit $rc"
         worker = DockerSSHWorker(host, port, user, pwd,
-                                 commands=[cmd, f"echo '===LOAD_{self._load_queue_idx}_DONE==='"],
+                                 commands=[cmd],
+                                 command_timeout=None,
                                  parent=self)
+        self._load_worker = worker
         worker.output_ready.connect(self._on_worker_output)
         if self._load_progress_dlg:
             worker.output_ready.connect(self._load_progress_dlg.append_log)
@@ -3957,12 +3963,24 @@ class DockerManager(QWidget):
         total = len(self._load_queue)
         idx = self._load_queue_idx + 1
         results = data.get("results", [])
-        success = any(f"===LOAD_{self._load_queue_idx}_DONE===" in r.get("stdout", "") for r in results)
+        marker = f"===LOAD_{self._load_queue_idx}_RC:"
+        rc_marker = None
+        for r in results:
+            out = r.get("stdout", "")
+            if marker in out:
+                try:
+                    rc_marker = int(out.rsplit(marker, 1)[1].split("===", 1)[0])
+                except (ValueError, IndexError):
+                    rc_marker = None
+                break
+        success = any(r.get("exit_status") == 0 for r in results) and rc_marker == 0
         if success:
             msg = f"\u2705 \u52a0\u8f7d\u5b8c\u6210 [{idx}/{total}]: {f}"
             self._log(msg)
         else:
-            err = results[0].get("stderr", "\u672a\u77e5\u9519\u8bef") if results else "\u672a\u77e5\u9519\u8bef"
+            err = "\u672a\u77e5\u9519\u8bef"
+            if results:
+                err = results[0].get("stderr") or results[0].get("stdout") or err
             msg = f"\u274c \u52a0\u8f7d\u5931\u8d25 [{idx}/{total}]: {err[:200]}"
             self._log(msg)
         if self._load_progress_dlg:
