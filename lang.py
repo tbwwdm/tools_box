@@ -6,21 +6,6 @@
 
 # 英文翻译字典
 EN_TEXTS = {
-    # ========== Linux_Chrony_NTP_sub.py ==========
-    "NTPConfigTool": {
-        "window_title": "Batch NTP Configuration",
-        "config_file_label": "Config File:",
-        "config_file_placeholder": "Select config file with SSH info",
-        "select_file_btn": "Select File",
-        "server_label": "NTP Server:",
-        "server_placeholder": "ntp.aliyun.com",
-        "timezone_label": "Timezone:",
-        "config_btn": "Configure NTP",
-        "restore_btn": "Restore Config",
-        "check_btn": "Check Status",
-        "clear_btn": "Clear Log",
-    },
-    
     # ========== Linux_Tools_sub.py ==========
     "LinuxToolsGUI": {
         "window_title": "Linux Tools Suite",
@@ -78,15 +63,6 @@ EN_TEXTS = {
         "start_container": "Start Container",
         "stop_container": "Stop Container",
         "image_manage": "Image Management",
-    },
-    
-    # ========== Linux_Base_Config_sub.py ==========
-    "LinuxBaseConfig": {
-        "window_title": "Server Initialization",
-        "start": "Start Config",
-        "check": "Check Status",
-        "save": "Save Config",
-        "import_config": "Import Config",
     },
     
     # ========== Linux_yum_sub.py ==========

@@ -5,25 +5,6 @@
 
 # 英文翻译字典 - 按类名和中文文本映射
 TRANSLATIONS = {
-    "NTPConfigTool": {
-        "NTP配置工具": "Batch NTP Configuration",
-        "配置文件": "Config File",
-        "选择包含SSH登录信息的配置文件": "Select config file with SSH info",
-        "选择文件": "Select File",
-        "NTP服务器": "NTP Server",
-        "ntp.aliyun.com": "ntp.aliyun.com",
-        "MinPoll": "MinPoll",
-        "MaxPoll": "MaxPoll",
-        "Step": "Step",
-        "时区": "Timezone",
-        "执行配置": "Configure NTP",
-        "还原配置": "Restore Config",
-        "获取状态": "Check Status",
-        "清空日志": "Clear Log",
-        "操作日志": "Operation Log",
-        "状态": "Status",
-    },
-    
     "LinuxToolsGUI": {
         "Linux工具集": "Linux Tools Suite",
         "用户管理": "User Management",
@@ -75,14 +56,6 @@ TRANSLATIONS = {
         "启动容器": "Start Container",
         "停止容器": "Stop Container",
         "镜像管理": "Image Management",
-    },
-    
-    "LinuxBaseConfig": {
-        "服务器初始化": "Server Initialization",
-        "开始配置": "Start Config",
-        "检查状态": "Check Status",
-        "保存配置": "Save Config",
-        "导入配置": "Import Config",
     },
     
     "MainWindow": {

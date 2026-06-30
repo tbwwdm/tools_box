@@ -1,15 +1,6 @@
 {
   "tools": [
     {
-      "name": "批量配置NTP",
-      "name_en": "Batch NTP Configuration",
-      "description": "使用条件：提前在系统中安装chrony包即可。\n使用说明：\n  1.批量配置Linux服务器时间同步。\n  2.支持配置、还原、获取NTP状态等信息。\n  3.支持常见系统，如Redhat、Kylin、Ubuntu等。",
-      "description_en": "Prerequisite: chrony package must be installed.\nUsage:\n  1. Batch configure NTP time synchronization for Linux servers.\n  2. Support configure, restore, get NTP status, etc.\n  3. Support common systems like Redhat, Kylin, Ubuntu, etc.",
-      "module": "Linux_Chrony_NTP_sub",
-      "class": "NTPConfigTool",
-      "icon": "🕐"
-    },
-    {
       "name": "Linux工具集",
       "name_en": "Linux Tools",
       "description": "Linux服务器管理工具集：用户管理（新增/删除）、SSH配置（端口/root登录）、登录测试、用户列表获取、安全基线检查",
@@ -64,19 +55,10 @@
       "icon": "🐳"
     },
     {
-      "name": "服务器初始化",
-      "name_en": "Server Initialization",
-      "description": "服务器初始化",
-      "description_en": "Server initialization",
-      "module": "Linux_Base_Config_sub",
-      "class": "LinuxBaseConfig",
-      "icon": "🔧"
-    },
-    {
       "name": "YUM源管理器",
       "name_en": "YUM Repository Manager",
-      "description": "Linux YUM 源管理器：创建本地 yum 源（ISO挂载）、Web yum 源（httpd）、新增 Web yum 源。支持防火墙/SELinux 一键关闭、多 ISO 批量处理、客户端 .repo 文件分发与检测。",
-      "description_en": "Linux YUM repository manager: Create local yum repository (ISO mount), Web yum repository (httpd), add Web yum repository. Support firewall/SELinux one-click disable, multi-ISO batch processing, client .repo file distribution and detection.",
+      "description": "Linux系统管理工具箱：\n  1. YUM服务器配置 — 创建本地/Web yum源，防火墙/SELinux一键关闭\n  2. YUM客户端配置 — .repo文件分发与检测\n  3. NTP时间同步 — 批量配置/还原/状态检查（需提前安装chrony）\n  4. 系统初始化 — 批量执行初始化任务\n支持Excel导入服务器列表，后台异步执行不卡界面。",
+      "description_en": "Linux System Management Toolbox:\n  1. YUM Server Config - Create local/web yum repository, firewall/SELinux disable\n  2. YUM Client Config - .repo file distribution and detection\n  3. NTP Time Sync - Batch configure/restore/status check (requires chrony)\n  4. System Init - Batch execute initialization tasks\nSupports Excel import for server lists, async execution without UI freeze.",
       "module": "Linux_yum_sub",
       "class": "MainWindow",
       "icon": "📦"
