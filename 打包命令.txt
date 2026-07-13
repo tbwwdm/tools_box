@@ -14,4 +14,5 @@ python -m nuitka Toolbox_Main.py `
     --jobs=8 `
     --include-data-dir=input=input `
     --include-data-dir=config=config `
+    --windows-icon-from-ico=E:\08.Python\000icologo\bee.ico `
     $all_modules

@@ -1,0 +1,50 @@
+{
+  "MGCF": {
+    "files": [ {"path":"/opt/mswitch/UTEx-BMCF/nohup.out", "desc": "启动日志"}],
+    "directories": [ {"path":"/opt/mswitch/UTEx-BMCF/log", "desc": "MGCF运行日志"}]
+  },
+  "CCF": {
+    "files": [{"path":"/opt/utoss/server/bs/bin/nohup.out", "desc": "启动日志"}],
+    "directories": [{"path":"/opt/utoss/server/bs/log/psc", "desc": "CCF运行日志"}]
+  },
+  "NMS_OLD": {
+    "files": [
+      {"path": "/opt/wacos/server/nms/WebNMS/bin/nohup.out", "desc": "启动日志"},
+      {"path": "/opt/wacos/server/nms/WebNMS/logs/pm/PmDb*.txt", "desc": "网管中入库日志的物理路径"},
+      {"path": "/opt/wacos/server/nms/WebNMS/logs/pm/PmDbUtil*.txt", "desc": "网管中入库日志的物理路径"},
+      {"path": "/opt/wacos/server/nms/WebNMS/logs/pm/CSPJobsdistri*.txt", "desc": "网管获取网元报表日志"},
+      {"path": "/opt/wacos/server/nms/WebNMS/logs/pm/CSPgetFtpfile*.txt", "desc": "网管获取网元报表日志"},
+      {"path": "/opt/wacos/server/nms/WebNMS/logs/pm/CSPCalFtpfile*.txt", "desc": "网管获取网元报表日志"}
+    ],
+    "directories": [
+      {"path": "/opt/wacos/server/nms/WebNMS/PMHistoryReport/oldftpfile", "desc": "FTP处理成功的原始文件"},
+      {"path": "/opt/wacos/server/nms/WebNMS/PMHistoryReport/ftpfile", "desc": "FTP处理失败的原始文件"},
+      {"path": "/opt/wacos/server/nms/WebNMS/PMHistoryReport/oldsnmpfile", "desc": "SNMP处理成功的原始文件"},
+      {"path": "/opt/wacos/server/nms/WebNMS/PMHistoryReport/rawdata", "desc": "SNMP处理失败的原始文件"}
+    ]
+  },
+  "SBC": {
+    "files": [
+      {"path": "/var/log/syslog*", "desc": "系统运行日志"},
+      {"path": "/var/Log/Sag1/SagTracer_*", "desc": "SBCS日志"},
+      {"path": "/home/spnr/bin/spnrrun.log", "desc": "SBCS&SBCM系统运行日志"}
+    ],
+    "directories": [
+      {"path": "/mnt/hfs1/PROGRAM/pdump", "desc": "SBCM媒体抓包"}
+    ]
+  },
+  "NMS_S90": {
+    "directories": [
+      "/opt/wacos/server/nms/s90/nms-cm/log/",
+      "/opt/wacos/server/nms/s90/nms-db/log/",
+      "/opt/wacos/server/nms/s90/nms-fm/log/",
+      "/opt/wacos/server/nms/s90/nms-lm/log/",
+      "/opt/wacos/server/nms/s90/nms-pm/log/",
+      "/opt/wacos/server/nms/s90/nms-sm/log/",
+      "/opt/wacos/server/nms/s90/nms-ts/log/",
+      "/opt/wacos/server/nms/s90/nms-topo/log/",
+      "/opt/wacos/server/nms/s90/nms-gateway/log/",
+      "/opt/wacos/server/nms/s90/nms-cloud-gateway/log/"
+    ]
+  }
+}

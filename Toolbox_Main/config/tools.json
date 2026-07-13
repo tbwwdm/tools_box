@@ -1,0 +1,67 @@
+{
+  "tools": [
+    {
+      "name": "批量配置NTP",
+      "description": "使用条件：提前在系统中安装chrony包即可。\n使用说明：\n  1.批量配置Linux服务器时间同步。\n  2.支持配置、还原、获取NTP状态等信息。\n  3.支持常见系统，如Redhat、Kylin、Ubuntu等。",
+      "module": "Linux_Chrony_NTP_sub",
+      "class": "NTPConfigTool",
+      "icon": "🕐"
+    },
+    {
+      "name": "Linux工具集",
+      "description": "Linux服务器管理工具集：用户管理（新增/删除）、SSH配置（端口/root登录）、登录测试、用户列表获取、安全基线检查",
+      "module": "Linux_Tools_sub",
+      "class": "LinuxToolsGUI",
+      "icon": "💻"
+    },
+    {
+      "name": "密码生成器",
+      "description": "生成随机密码，支持单个生成、批量生成、Excel文件处理，自动保存日志",
+      "module": "Tool_Passwd_Creat_sub",
+      "class": "PasswdTool",
+      "icon": "🔑"
+    },
+    {
+      "name": "PDF工具集",
+      "description": "PDF处理工具：支持PDF合并、拆分、A4多页拼版，支持文件拖拽输入。",
+      "module": "PDF_Tool_sub",
+      "class": "PDFToolBox",
+      "icon": "📄"
+    },
+    {
+      "name": "网段Ping扫描器",
+      "description": "批量Ping扫描IP网段，可视化网格显示通断状态，支持两轮重试机制",
+      "module": "Ping_Scanner_sub",
+      "class": "PingScanner",
+      "icon": "🌐"
+    },
+    {
+      "name": "IMS工具",
+      "description": "IMS 综合工具：抓包(SBCM/tcpdump) + 网元升级 + 日志查看",
+      "module": "IMS_Tool_sub",
+      "class": "IMSTool",
+      "icon": "📦"
+    },
+    {
+      "name": "Docker自动化",
+      "description": "远程Docker管理，容器创建/删除/导入/导出，镜像管理，网络管理，批量操作",
+      "module": "Linux_Docker_Tool_sub",
+      "class": "DockerManager",
+      "icon": "🐳"
+    },
+    {
+      "name": "服务器初始化",
+      "description": "服务器初始化",
+      "module": "Linux_Base_Config_sub",
+      "class": "LinuxBaseConfig",
+      "icon": "🐳"
+    },
+    {
+      "name": "YUM源管理器",
+      "description": "Linux YUM 源管理器：创建本地 yum 源（ISO挂载）、Web yum 源（httpd）、新增 Web yum 源。支持防火墙/SELinux 一键关闭、多 ISO 批量处理、客户端 .repo 文件分发与检测。",
+      "module": "Linux_yum_sub",
+      "class": "MainWindow",
+      "icon": "📦"
+    }
+  ]
+}
