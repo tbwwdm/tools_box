@@ -324,7 +324,7 @@ class IPv6CalculatorApp(QMainWindow):
     }
     """
 
-    def __init__(self):
+    def __init__(self, lang="zh"):
         super().__init__()
         self.setWindowTitle("IPv6 Mask Calculator Pro")
         self.setMinimumSize(900, 780)

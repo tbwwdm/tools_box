@@ -329,7 +329,13 @@ if __name__ == "__main__":
 
     w = QMainWindow()
     w.setWindowTitle(LANGUAGES[CURRENT_LANG]["window_title"])
-    w.setGeometry(150, 80, 1500, 800)
+    # 自适应窗口大小：约 1/4 屏幕面积，居中
+    screen = QApplication.primaryScreen().availableGeometry()
+    win_w = int(screen.width() * 0.52)
+    win_h = int(screen.height() * 0.58)
+    x = (screen.width() - win_w) // 2 + screen.x()
+    y = (screen.height() - win_h) // 2 + screen.y()
+    w.setGeometry(x, y, win_w, win_h)
     w.setMinimumSize(800, 500)
 
     cw = QWidget()

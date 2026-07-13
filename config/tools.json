@@ -62,6 +62,15 @@
       "module": "Linux_yum_sub",
       "class": "MainWindow",
       "icon": "📦"
+    },
+    {
+      "name": "IPv6掩码计算器",
+      "name_en": "IPv6 Mask Calculator",
+      "description": "IPv6地址规划与计算：地址展开/压缩、Prefix计算、地址范围、类型识别",
+      "description_en": "IPv6 address planning and calculation",
+      "module": "Ipv6_CDR",
+      "class": "IPv6CalculatorApp",
+      "icon": "🌐"
     }
   ]
 }
