@@ -9,9 +9,9 @@ from scp import SCPClient
 from PySide6.QtWidgets import (QWidget, QApplication, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QCheckBox, QTextEdit, QFileDialog,
     QMessageBox, QComboBox, QFormLayout, QFrame, QProgressBar, QGroupBox,
-    QTabWidget, QGridLayout, QDialog, QListWidget, QListWidgetItem,
+    QGridLayout, QDialog, QListWidget, QListWidgetItem,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QMenu,
-    QScrollArea, QSplitter, QTreeWidget, QTreeWidgetItem)
+    QScrollArea, QSplitter, QTreeWidget, QTreeWidgetItem, QSizePolicy)
 from PySide6.QtCore import QThread, Signal, Qt, QTimer, QEvent
 from PySide6.QtGui import QFont, QAction
 
@@ -38,35 +38,79 @@ def _save_hosts(hosts):
         QMessageBox.warning(None, "Save Failed", str(e))
         return False
 
-STYLE_XIAOMI = """
-    QWidget { background:#f5f5f5; }
-    QLabel { color:#1a1a1a; font-size:12px; }
-    QLineEdit { background:white; border:1px solid #e0e0e0; border-radius:8px; padding:7px 12px; font-size:13px; }
-    QLineEdit:focus { border-color:#ff6900; }
-    QLineEdit:disabled { background:#f5f5f5; color:#999; }
-    QComboBox { background:white; border:1px solid #e0e0e0; border-radius:8px; padding:7px 12px; font-size:13px; min-height:16px; }
-    QComboBox:focus { border-color:#ff6900; }
-    QComboBox::drop-down { border:none; width:22px; }
-    QComboBox QAbstractItemView { background:white; border:1px solid #e0e0e0; border-radius:8px; selection-background-color:#f5f5f5; selection-color:#1a1a1a; padding:4px; }
-    QComboBox QAbstractItemView QScrollBar:vertical { background:transparent; width:6px; margin:2px 0; }
-    QComboBox QAbstractItemView QScrollBar::handle:vertical { background:#c0c0c0; border-radius:3px; min-height:20px; }
-    QComboBox QAbstractItemView QScrollBar::handle:vertical:hover { background:#a0a0a0; }
-    QComboBox QAbstractItemView QScrollBar::add-line:vertical, QComboBox QAbstractItemView QScrollBar::sub-line:vertical { height:0; }
-    QScrollBar:vertical { background:#f0f0f0; width:8px; border-radius:4px; }
-    QScrollBar::handle:vertical { background:#c0c0c0; border-radius:4px; min-height:24px; }
-    QScrollBar::handle:vertical:hover { background:#a0a0a0; }
-    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
-    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background:none; }
-    QCheckBox { font-size:12px; spacing:6px; }
-    QCheckBox::indicator { width:18px; height:18px; border:1px solid #d0d0d0; border-radius:4px; background:white; }
-    QCheckBox::indicator:checked { background:#ff6900; border-color:#ff6900; }
-    QTextEdit { background:#fafafa; border:1px solid #e8e8e8; border-radius:8px; padding:8px; font-size:11px; }
-    QProgressBar { border:none; border-radius:5px; background:#e8e8e8; height:5px; text-align:center; font-size:10px; }
-    QProgressBar::chunk { background:#ff6900; border-radius:5px; }
-    QGroupBox { font-weight:bold; border:1px solid #dfe6e9; border-radius:6px; margin-top:10px; padding:16px 12px 12px; background:white; }
-    QGroupBox::title { subcontrol-origin:margin; left:12px; padding:0 6px; }
-    QTableWidget { background:white; border:1px solid #e0e0e0; border-radius:8px; gridline-color:#f0f0f0; }
-    QHeaderView::section { background:#fafafa; border:none; border-bottom:1px solid #e0e0e0; padding:8px; font-weight:600; }
+# ═══════════════════════════════════════════════
+#  Theme System
+# ═══════════════════════════════════════════════
+
+_T = {
+    "primary": "#0984e3",
+    "primary_hover": "#0873c4",
+    "primary_light": "#e8f4fd",
+    "accent": "#ff6900",
+    "accent_light": "#fff3e6",
+    "success": "#00b894",
+    "success_hover": "#00a381",
+    "danger": "#e74c3c",
+    "danger_hover": "#c0392b",
+    "warning": "#f39c12",
+    "bg": "#f0f2f5",
+    "surface": "#ffffff",
+    "surface_alt": "#f8f9fa",
+    "border": "#e0e0e0",
+    "border_light": "#f0f0f0",
+    "text": "#1a1a1a",
+    "text_secondary": "#636e72",
+    "text_hint": "#999999",
+    "shadow": "rgba(0,0,0,0.06)",
+    "card_radius": "10px",
+    "btn_radius": "6px",
+    "input_radius": "6px",
+    "gap_xs": "2px",
+    "gap_sm": "4px",
+    "gap_md": "8px",
+    "gap_lg": "12px",
+    "gap_xl": "16px",
+    "gap_2xl": "24px",
+    "font_sm": "11px",
+    "font_md": "12px",
+    "font_lg": "13px",
+    "font_xl": "14px",
+    "font_title": "16px",
+}
+
+STYLE_XIAOMI = f"""
+    QWidget {{ background:{_T['bg']}; }}
+    QLabel {{ color:{_T['text']}; font-size:{_T['font_md']}; }}
+    QLineEdit {{
+        background:{_T['surface']}; border:1px solid {_T['border']};
+        border-radius:{_T['input_radius']}; padding:6px 10px; font-size:{_T['font_lg']};
+    }}
+    QLineEdit:focus {{ border-color:{_T['primary']}; }}
+    QLineEdit:disabled {{ background:{_T['surface_alt']}; color:{_T['text_hint']}; }}
+    QComboBox {{
+        background:{_T['surface']}; border:1px solid {_T['border']};
+        border-radius:{_T['input_radius']}; padding:6px 10px; font-size:{_T['font_lg']}; min-height:16px;
+    }}
+    QComboBox:focus {{ border-color:{_T['primary']}; }}
+    QComboBox::drop-down {{ border:none; width:22px; }}
+    QComboBox QAbstractItemView {{
+        background:{_T['surface']}; border:1px solid {_T['border']};
+        border-radius:{_T['btn_radius']}; selection-background-color:{_T['primary_light']};
+        selection-color:{_T['text']}; padding:4px;
+    }}
+    QCheckBox {{ color:{_T['text']}; font-size:{_T['font_md']}; spacing:6px; }}
+    QCheckBox::indicator {{ width:16px; height:16px; border:1px solid {_T['border']}; border-radius:3px; background:{_T['surface']}; }}
+    QCheckBox::indicator:checked {{ background:{_T['primary']}; border-color:{_T['primary']}; }}
+    QGroupBox {{ font-weight:bold; border:1px solid {_T['border']}; border-radius:{_T['card_radius']};
+        margin-top:12px; padding:14px 12px 12px; background:{_T['surface']}; font-size:{_T['font_lg']}; }}
+    QGroupBox::title {{ subcontrol-origin:margin; left:14px; padding:0 8px; color:{_T['text']}; }}
+    QScrollBar:vertical {{ background:{_T['surface_alt']}; width:8px; border-radius:4px; }}
+    QScrollBar::handle:vertical {{ background:{_T['border']}; border-radius:4px; min-height:24px; }}
+    QScrollBar::handle:vertical:hover {{ background:{_T['text_hint']}; }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height:0; }}
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background:none; }}
+    QProgressBar {{ border:none; border-radius:5px; background:{_T['border']}; height:4px; text-align:center; }}
+    QProgressBar::chunk {{ background:{_T['accent']}; border-radius:5px; }}
 """
 
 # ═══════════════════════════════════════════════
@@ -144,6 +188,10 @@ class ConfigDiffDialog(QDialog):
         self._hunk_decisions = []
         self._file_merged = {}
         self._build_ui()
+    def _tr(self, zh, en):
+        """根据 self.lang 返回对应文本"""
+        return en if self.lang == 'en' else zh
+
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -164,7 +212,7 @@ class ConfigDiffDialog(QDialog):
         btn_accept = QPushButton("接受此修改"); btn_accept.setStyleSheet("QPushButton{background:#27ae60;color:white;font-weight:bold;padding:10px 32px;border:none;border-radius:6px;font-size:14px;}QPushButton:hover{background:#219a52;}")
         btn_reject = QPushButton("保留旧版"); btn_reject.setStyleSheet("QPushButton{background:#e67e22;color:white;font-weight:bold;padding:10px 32px;border:none;border-radius:6px;font-size:14px;}QPushButton:hover{background:#d35400;}")
         btn_all_acc = QPushButton("全部接受"); btn_all_acc.setStyleSheet("QPushButton{font-size:11px;padding:6px 16px;border:1px solid #0984e3;color:#0984e3;border-radius:4px;background:white;}QPushButton:hover{background:#0984e3;color:white;}")
-        btn_all_rej = QPushButton("全部拒绝"); btn_all_rej.setStyleSheet("QPushButton{font-size:11px;padding:6px 16px;border:1px solid #e74c3c;color:#e74c3c;border-radius:4px;background:white;}QPushButton:hover{background:#e74c3c;color:white;}")
+        btn_all_rej = QPushButton("全部旧版"); btn_all_rej.setStyleSheet("QPushButton{font-size:11px;padding:6px 16px;border:1px solid #e74c3c;color:#e74c3c;border-radius:4px;background:white;}QPushButton:hover{background:#e74c3c;color:white;}")
         btn_accept.clicked.connect(self._on_accept)
         btn_reject.clicked.connect(self._on_reject)
         btn_all_acc.clicked.connect(self._on_accept_all)
@@ -260,8 +308,9 @@ def _remote_tcpdump_kill_cmd(remote_path):
 # ═══════════════════════════════════════════════
 
 class IMSTool(QWidget):
-    def __init__(self):
+    def __init__(self, lang="zh"):
         super().__init__()
+        self.lang = lang
         self._hosts = _load_hosts()
         self._capturing = False
         self._upgrading = False
@@ -282,99 +331,143 @@ class IMSTool(QWidget):
 
     # ── UI Init ──
 
-    def _btn_primary(self, text, color="#4caf50"):
-        return f"QPushButton{{background:{color};color:white;border:none;border-radius:8px;padding:8px 24px;font-size:13px;font-weight:600;}}QPushButton:hover{{background:{color};}}QPushButton:disabled{{background:#c8e6c9;color:white;}}"
+    def _btn_primary(self, text, color=None):
+        c = color or _T['primary']
+        h = _T['primary_hover'] if c == _T['primary'] else c
+        return f"QPushButton{{background:{c};color:white;border:none;border-radius:{_T['btn_radius']};padding:7px 20px;font-size:{_T['font_lg']};font-weight:600;}}QPushButton:hover{{background:{h};}}QPushButton:disabled{{background:{_T['border']};color:{_T['text_hint']};}}"
 
     def _btn_secondary(self):
-        return "QPushButton{background:#f5f5f5;color:#1a1a1a;border:1px solid #e0e0e0;border-radius:8px;padding:7px 16px;font-size:12px;}QPushButton:hover{background:#eee;}QPushButton:disabled{background:#fafafa;color:#ccc;}"
+        return f"QPushButton{{background:{_T['surface']};color:{_T['text']};border:1px solid {_T['border']};border-radius:{_T['btn_radius']};padding:6px 14px;font-size:{_T['font_md']};}}QPushButton:hover{{background:{_T['surface_alt']};}}QPushButton:disabled{{background:{_T['surface']};color:{_T['text_hint']};}}"
+
+    def _btn_danger(self):
+        return f"QPushButton{{background:{_T['danger']};color:white;border:none;border-radius:{_T['btn_radius']};padding:6px 14px;font-size:{_T['font_md']};font-weight:600;}}QPushButton:hover{{background:{_T['danger_hover']};}}QPushButton:disabled{{background:#ffcdd2;color:white;}}"
+
+    def _btn_success(self):
+        return f"QPushButton{{background:{_T['success']};color:white;border:none;border-radius:{_T['btn_radius']};padding:6px 14px;font-size:{_T['font_md']};font-weight:600;}}QPushButton:hover{{background:{_T['success_hover']};}}QPushButton:disabled{{background:#b2dfdb;color:white;}}"
+
+    def _btn_small(self, color=None):
+        c = color or _T['surface_alt']
+        return f"QPushButton{{background:{c};color:{_T['text_secondary']};border:1px solid {_T['border']};border-radius:4px;padding:4px 10px;font-size:{_T['font_sm']};}}QPushButton:hover{{background:{_T['border']};}}"
 
     def _init_ui(self):
-        self.setWindowTitle("IMS 工具")
-        self.resize(960, 780)
+        title = "IMS Tools" if self.lang == "en" else "IMS 工具"
+        self.setWindowTitle(title)
+        self.resize(1400, 900)
         self.setStyleSheet(STYLE_XIAOMI)
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(8)
-        layout.setContentsMargins(12, 12, 12, 12)
-
-        # ── Title ──
-        title = QLabel("IMS 工具")
-        title.setStyleSheet("font-size:20px;font-weight:bold;color:#1a1a1a;")
-        layout.addWidget(title)
-
-        # ── Shared Host Bar ──
+        # ── Pre-init host data (needed by tab init) ──
         self._host_rows = []
         self._host_container = QVBoxLayout()
-        self._host_container.setSpacing(4)
+        self._host_container.setSpacing(6)
+        self._host_container.setContentsMargins(0, 0, 0, 0)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # ── Title Bar ──
+        title_bar = QWidget()
+        title_bar.setFixedHeight(40)
+        title_bar.setStyleSheet(f"background:{_T['surface']};border-bottom:1px solid {_T['border']};")
+        tb_layout = QHBoxLayout(title_bar)
+        tb_layout.setContentsMargins(12, 0, 16, 0)
+        tb_layout.setSpacing(0)
+
+        title = QLabel("IMS 工具")
+        title.setStyleSheet(f"font-size:{_T['font_title']};font-weight:bold;color:{_T['text']};")
+        tb_layout.addWidget(title)
+        tb_layout.addStretch()
+        layout.addWidget(title_bar)
+
+        # ── Content Area ──
+        content = QWidget()
+        content.setStyleSheet(f"background:{_T['bg']};")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(10, 8, 10, 0)
+        content_layout.setSpacing(6)
+
+        # ── Shared Host Bar ──
         self._add_host_row()
+
+        host_btn_row = QHBoxLayout()
+        host_btn_row.setContentsMargins(0, 0, 0, 0)
         self._add_host_btn = QPushButton("+ Add Host")
-        self._add_host_btn.setFixedWidth(90)
-        self._add_host_btn.setStyleSheet("QPushButton{background:#00b894;color:white;border:none;border-radius:4px;font-size:12px;padding:4px 8px;}QPushButton:hover{background:#00a381;}")
+        self._add_host_btn.setFixedHeight(28)
+        self._add_host_btn.setStyleSheet(
+            f"QPushButton{{background:{_T['success']};color:white;border:none;border-radius:4px;"
+            f"font-size:{_T['font_sm']};padding:4px 12px;font-weight:600;}}"
+            f"QPushButton:hover{{background:{_T['success_hover']};}}"
+        )
         self._add_host_btn.clicked.connect(lambda: self._add_host_row())
-        self._host_container.addWidget(self._add_host_btn)
-        layout.addLayout(self._host_container)
+        host_btn_row.addWidget(self._add_host_btn)
+        host_btn_row.addStretch()
+        self._host_container.addLayout(host_btn_row)
+        content_layout.addLayout(self._host_container)
 
-        # ── Tab Widget ──
-        self.tabs = QTabWidget()
-        self.tabs.setStyleSheet("""
-            QTabWidget::pane{border:1px solid #e0e0e0;border-radius:8px;background:white;border-top-left-radius:0;}
-            QTabBar::tab{background:#f0f0f0;color:#555;padding:10px 28px;font-size:13px;font-weight:500;border:1px solid #e0e0e0;border-bottom:none;border-top-left-radius:6px;border-top-right-radius:6px;margin-right:2px;}
-            QTabBar::tab:hover{background:#e3f2fd;color:#1565c0;}
-            QTabBar::tab:selected{background:white;color:#ff6900;font-weight:700;border-bottom:2px solid white;}
-        """)
-        self._init_capture_tab()
-        self._init_upgrade_tab()
-        self._init_log_tab()
+        # ── Main body: left=Log, right=Capture+Upgrade ──
+        body_splitter = QSplitter(Qt.Horizontal)
+        body_splitter.setStyleSheet(f"QSplitter{{background:transparent;}} QSplitter::handle{{background:{_T['border']};width:2px;}}")
+        body_splitter.setHandleWidth(3)
 
-        # ── Splitter: resize tabs / log by draggable handle ──
-        self._splitter = QSplitter(Qt.Vertical)
-        self._splitter.setChildrenCollapsible(False)
-        self._splitter.addWidget(self.tabs)
+        # Left panel: 日志 (Log)
+        log_card = self._init_log_tab()
+        log_card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        body_splitter.addWidget(log_card)
 
+        # Right panel: 抓包 + 升级 stacked vertically
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(6)
+
+        right_splitter = QSplitter(Qt.Vertical)
+        right_splitter.setStyleSheet(f"QSplitter{{background:transparent;}} QSplitter::handle{{background:{_T['border']};height:2px;}}")
+        right_splitter.setHandleWidth(3)
+
+        capture_card = self._init_capture_tab()
+        capture_card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        right_splitter.addWidget(capture_card)
+        upgrade_card = self._init_upgrade_tab()
+        upgrade_card.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        right_splitter.addWidget(upgrade_card)
+        right_splitter.setStretchFactor(0, 1)
+        right_splitter.setStretchFactor(1, 1)
+
+        right_layout.addWidget(right_splitter)
+        body_splitter.addWidget(right_panel)
+
+        body_splitter.setStretchFactor(0, 3)
+        body_splitter.setStretchFactor(1, 2)
+
+        content_layout.addWidget(body_splitter, 0)
+
+        # ── Log Console (bottom, fixed) ──
         bottom_panel = QWidget()
+        bottom_panel.setFixedHeight(160)
         bl = QVBoxLayout(bottom_panel)
         bl.setContentsMargins(0, 0, 0, 0)
         bl.setSpacing(4)
 
-        # ── Shared Progress ──
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
-        self.progress_bar.setFixedHeight(6)
+        self.progress_bar.setFixedHeight(4)
         bl.addWidget(self.progress_bar)
 
-        # ── Shared Log ──
-        bl.addWidget(QLabel("Log"))
         self.log_box = QTextEdit()
         self.log_box.setReadOnly(True)
         self.log_box.setFont(QFont("Consolas", 10))
-        self.log_box.setMinimumHeight(260)
-        self.log_box.setStyleSheet("QTextEdit{background:#fafafa;border:1px solid #e0e0e0;border-radius:8px;padding:8px;font-size:11px;}")
+        self.log_box.setStyleSheet(
+            f"QTextEdit{{background:{_T['surface']};border:1px solid {_T['border']};"
+            f"border-radius:{_T['card_radius']};padding:8px;font-size:{_T['font_sm']};}}"
+        )
         bl.addWidget(self.log_box)
-        self._splitter.addWidget(bottom_panel)
-        self._splitter.setSizes([245, 625])
 
-        # ── Tab change: toggle filter visibility ──
-        self.tabs.currentChanged.connect(self._on_tab_changed)
-        self.tabs.setMaximumHeight(245)
-
-        layout.addWidget(self._splitter, 1)
+        content_layout.addWidget(bottom_panel, 0)
+        layout.addWidget(content, 1)
 
         # Initial host trigger
         if self._hosts and self._host_rows:
             QTimer.singleShot(100, lambda: self._host_rows[0]['cb'].setCurrentIndex(0))
-
-    def _on_tab_changed(self, index):
-        show = index == 0
-        self._add_host_btn.setVisible(show)
-        for r in self._host_rows:
-            if 'filter_section' in r:
-                r['filter_section'].setVisible(show)
-        if show:
-            self.tabs.setMaximumHeight(245)
-            QTimer.singleShot(0, lambda: self._splitter.setSizes([245, 625]))
-        else:
-            self.tabs.setMaximumHeight(16777215)
-            QTimer.singleShot(0, lambda: self._splitter.setSizes([600, 260]))
 
     def _log(self, msg):
         ts = datetime.now().strftime("%H:%M:%S")
@@ -493,8 +586,6 @@ class IMSTool(QWidget):
 
         row['filter_section'] = filter_section
         main_layout.addWidget(filter_section)
-        if hasattr(self, 'tabs') and self.tabs.currentIndex() != 0:
-            filter_section.setVisible(False)
 
         row['frame'] = frame
         row['_conn_worker'] = None
@@ -512,7 +603,9 @@ class IMSTool(QWidget):
         for i, r in enumerate(self._host_rows):
             if r['frame'] is frame:
                 self._host_rows.pop(i)
-                frame.setParent(None); frame.deleteLater()
+                frame.setVisible(False)
+                self._host_container.removeWidget(frame)
+                frame.deleteLater()
                 break
         if not self._host_rows:
             self._add_host_row()
@@ -791,6 +884,10 @@ class IMSTool(QWidget):
             for r in self._host_rows:
                 if obj == r['cb'].lineEdit():
                     r['cb'].showPopup(); return True
+        if event.type() == QEvent.Type.KeyPress and hasattr(self, "log_table"):
+            if obj in (self.log_table, self.log_table.viewport()) and event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                self._log_activate_current_row()
+                return True
         return super().eventFilter(obj, event)
 
     def _selected_hosts(self):
@@ -825,53 +922,74 @@ class IMSTool(QWidget):
     # ═══════════════════════════════════════════════
 
     def _init_capture_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
         card = QFrame()
-        card.setStyleSheet("QFrame{background:white;border:1px solid #e0e0e0;border-radius:8px;margin:8px 8px 4px 8px;}")
-        cl = QVBoxLayout(card)
-        cl.setContentsMargins(10, 8, 10, 8)
-        cl.setSpacing(6)
+        card.setStyleSheet(
+            f"QFrame{{background:{_T['surface']};border:1px solid {_T['border']};"
+            f"border-radius:{_T['card_radius']};}}"
+        )
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
 
-        # Mode bar — compact row
+        # Section header
+        header = QLabel("Packet Capture" if self.lang == "en" else "抓包 Capture")
+        header.setStyleSheet(f"font-size:{_T['font_lg']};font-weight:bold;color:{_T['text']};padding-bottom:2px;")
+        layout.addWidget(header)
+
+        # Mode bar
         mode_bar = QHBoxLayout()
         mode_bar.setSpacing(6)
         self.cap_mode_cb = QComboBox()
         self.cap_mode_cb.addItems(["Manual", "Timed"])
         self.cap_mode_cb.setFixedWidth(90)
-        self.cap_mode_cb.setStyleSheet("QComboBox{border:1px solid #dfe6e9;border-radius:4px;padding:3px 6px;font-size:12px;background:#f8f9fa;}")
+        self.cap_mode_cb.setStyleSheet(
+            f"QComboBox{{border:1px solid {_T['border']};border-radius:4px;padding:3px 6px;"
+            f"font-size:{_T['font_md']};background:{_T['surface_alt']};}}"
+        )
         self.cap_mode_cb.currentIndexChanged.connect(self._on_cap_mode_changed)
         mode_bar.addWidget(self.cap_mode_cb)
 
         self.cap_dur_label = QLabel("Duration")
-        self.cap_dur_label.setStyleSheet("font-size:12px;")
+        self.cap_dur_label.setStyleSheet(f"font-size:{_T['font_md']};color:{_T['text_secondary']};")
         mode_bar.addWidget(self.cap_dur_label)
         self.cap_duration = QLineEdit("30")
         self.cap_duration.setFixedWidth(45)
         self.cap_duration.setAlignment(Qt.AlignCenter)
-        self.cap_duration.setStyleSheet("QLineEdit{border:1px solid #dfe6e9;border-radius:4px;padding:3px 4px;font-size:12px;}")
+        self.cap_duration.setStyleSheet(
+            f"QLineEdit{{border:1px solid {_T['border']};border-radius:4px;padding:3px 4px;font-size:{_T['font_md']};}}"
+        )
         mode_bar.addWidget(self.cap_duration)
         self.cap_dur_unit = QComboBox()
         self.cap_dur_unit.addItems(["sec", "min"])
         self.cap_dur_unit.setFixedWidth(60)
-        self.cap_dur_unit.setStyleSheet("QComboBox{border:1px solid #dfe6e9;border-radius:4px;padding:3px 4px;font-size:12px;background:#f8f9fa;}")
+        self.cap_dur_unit.setStyleSheet(
+            f"QComboBox{{border:1px solid {_T['border']};border-radius:4px;padding:3px 4px;"
+            f"font-size:{_T['font_md']};background:{_T['surface_alt']};}}"
+        )
         mode_bar.addWidget(self.cap_dur_unit)
         mode_bar.addStretch()
 
         self.cap_start_btn = QPushButton("Start")
-        self.cap_start_btn.setStyleSheet("QPushButton{background:#4caf50;color:white;border:none;border-radius:6px;padding:5px 18px;font-size:12px;font-weight:600;}QPushButton:hover{background:#43a047;}QPushButton:disabled{background:#c8e6c9;color:white;}")
+        self.cap_start_btn.setStyleSheet(
+            f"QPushButton{{background:{_T['success']};color:white;border:none;border-radius:{_T['btn_radius']};"
+            f"padding:5px 18px;font-size:{_T['font_md']};font-weight:600;}}"
+            f"QPushButton:hover{{background:{_T['success_hover']};}}"
+            f"QPushButton:disabled{{background:#a5d6a7;color:white;}}"
+        )
         self.cap_start_btn.clicked.connect(self._do_cap_start)
         mode_bar.addWidget(self.cap_start_btn)
         self.cap_stop_btn = QPushButton("Stop")
-        self.cap_stop_btn.setStyleSheet("QPushButton{background:#f44336;color:white;border:none;border-radius:6px;padding:5px 18px;font-size:12px;font-weight:600;}QPushButton:hover{background:#d32f2f;}QPushButton:disabled{background:#ffcdd2;color:white;}")
+        self.cap_stop_btn.setStyleSheet(
+            f"QPushButton{{background:{_T['danger']};color:white;border:none;border-radius:{_T['btn_radius']};"
+            f"padding:5px 18px;font-size:{_T['font_md']};font-weight:600;}}"
+            f"QPushButton:hover{{background:{_T['danger_hover']};}}"
+            f"QPushButton:disabled{{background:#ffcdd2;color:white;}}"
+        )
         self.cap_stop_btn.clicked.connect(self._do_cap_manual_stop)
         self.cap_stop_btn.setEnabled(False)
         mode_bar.addWidget(self.cap_stop_btn)
 
-        cl.addLayout(mode_bar)
+        layout.addLayout(mode_bar)
 
         # Save path
         path_row = QHBoxLayout()
@@ -885,22 +1003,22 @@ class IMSTool(QWidget):
         path_row.addWidget(browse_btn)
         self.cap_compress_cb = QCheckBox("Compress")
         path_row.addWidget(self.cap_compress_cb)
-        cl.addLayout(path_row)
+        layout.addLayout(path_row)
 
-        # Command preview — stretches to fill available card space
+        # Command preview
         self.cap_preview = QTextEdit()
         self.cap_preview.setReadOnly(True)
-        self.cap_preview.setFixedHeight(88)
+        self.cap_preview.setFixedHeight(120)
         self.cap_preview.setStyleSheet(
-            "QTextEdit{background:#fafafa;border:1px solid #e0e0e0;border-radius:8px;"
-            "padding:8px 12px;font-family:Consolas,monospace;font-size:11px;color:#1a1a1a;}")
-        cl.addWidget(self.cap_preview)
-
-        layout.addWidget(card, 0, Qt.AlignTop)
+            f"QTextEdit{{background:{_T['surface_alt']};border:1px solid {_T['border']};"
+            f"border-radius:{_T['card_radius']};padding:8px 12px;font-family:Consolas,monospace;"
+            f"font-size:{_T['font_sm']};color:{_T['text']};}}"
+        )
+        layout.addWidget(self.cap_preview)
 
         self._on_cap_mode_changed(self.cap_mode_cb.currentIndex())
         self._cap_update_preview()
-        self.tabs.addTab(tab, "抓包")
+        return card
 
     def _on_cap_mode_changed(self, idx):
         if idx == 0:
@@ -1236,27 +1354,48 @@ class IMSTool(QWidget):
     # ═══════════════════════════════════════════════
 
     def _init_upgrade_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(12, 12, 12, 12)
+        card = QFrame()
+        card.setStyleSheet(
+            f"QFrame{{background:{_T['surface']};border:1px solid {_T['border']};"
+            f"border-radius:{_T['card_radius']};}}"
+        )
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
 
         self.ne_configs = self._load_ne_configs()
 
+        # Section header
+        header = QLabel("升级 Upgrade")
+        header.setStyleSheet(f"font-size:{_T['font_lg']};font-weight:bold;color:{_T['text']};padding-bottom:2px;")
+        layout.addWidget(header)
+
         # NE type config
-        ne_group = QGroupBox("Upgrade Config")
-        nfl = QFormLayout(ne_group); nfl.setSpacing(6)
+        cfg_row = QHBoxLayout()
+        cfg_row.setSpacing(8)
+        cfg_row.addWidget(QLabel("NE Type:"))
         self.up_ne_combo = QComboBox()
+        self.up_ne_combo.setMinimumWidth(200)
         for ne_type, nc in self.ne_configs.items():
             self.up_ne_combo.addItem(f"{nc.get('description','?')} ({ne_type})", (ne_type, nc))
         self.up_ne_combo.currentIndexChanged.connect(lambda _: self._update_upgrade_button_state())
-        nfl.addRow("NE Type:", self.up_ne_combo)
+        cfg_row.addWidget(self.up_ne_combo)
+        cfg_row.addWidget(QLabel("Description:"))
         self.up_desc_input = QLineEdit()
-        self.up_desc_input.setPlaceholderText("Optional description for this upgrade")
-        nfl.addRow("Description:", self.up_desc_input)
+        self.up_desc_input.setPlaceholderText("Optional")
+        self.up_desc_input.setMinimumWidth(120)
+        cfg_row.addWidget(self.up_desc_input, 1)
+        layout.addLayout(cfg_row)
+
+        # Patch file
         patch_row = QHBoxLayout()
-        self.up_patch_path = QLineEdit(); self.up_patch_path.setPlaceholderText("Select patch file(s)")
-        patch_row.addWidget(self.up_patch_path)
-        patch_btn = QPushButton("Browse"); patch_btn.setStyleSheet("QPushButton{background:#f5f5f5;color:#1a1a1a;border:1px solid #e0e0e0;border-radius:8px;padding:7px 16px;font-size:12px;}QPushButton:hover{background:#eee;}")
+        patch_row.setSpacing(6)
+        patch_row.addWidget(QLabel("Patch:"))
+        self.up_patch_path = QLineEdit()
+        self.up_patch_path.setPlaceholderText("Select patch file(s)")
+        patch_row.addWidget(self.up_patch_path, 1)
+        patch_btn = QPushButton("Browse")
+        patch_btn.setStyleSheet(self._btn_secondary())
         def on_browse_patch():
             ne_type, ne_config = self.up_ne_combo.currentData()
             patch_cfg = ne_config.get("patch", {})
@@ -1283,7 +1422,8 @@ class IMSTool(QWidget):
                 self.up_patch_path.setText(fpath)
         patch_btn.clicked.connect(on_browse_patch)
         patch_row.addWidget(patch_btn)
-        patch_dir_btn = QPushButton("Folder"); patch_dir_btn.setStyleSheet("QPushButton{background:#f5f5f5;color:#1a1a1a;border:1px solid #e0e0e0;border-radius:8px;padding:7px 16px;font-size:12px;}QPushButton:hover{background:#eee;}")
+        patch_dir_btn = QPushButton("Folder")
+        patch_dir_btn.setStyleSheet(self._btn_secondary())
         def on_browse_patch_dir():
             ne_type, ne_config = self.up_ne_combo.currentData()
             patch_cfg = ne_config.get("patch", {})
@@ -1302,49 +1442,107 @@ class IMSTool(QWidget):
             self._append_patch_paths([dpath])
         patch_dir_btn.clicked.connect(on_browse_patch_dir)
         patch_row.addWidget(patch_dir_btn)
-        nfl.addRow("Patch File:", patch_row)
-        layout.addWidget(ne_group)
+        layout.addLayout(patch_row)
 
-        # NE service control
-        svc_row = QHBoxLayout()
+        # NE service control + Steps in horizontal layout
+        mid_row = QHBoxLayout()
+        mid_row.setSpacing(8)
+
+        # Service buttons (compact vertical stack)
+        svc_col = QVBoxLayout()
+        svc_col.setSpacing(4)
         self.ne_start_btn = QPushButton("▶ Start NE")
-        self.ne_start_btn.setStyleSheet("QPushButton{background:#27ae60;color:white;border:none;border-radius:8px;padding:8px 24px;font-size:13px;font-weight:600;}QPushButton:hover{background:#219a52;}QPushButton:disabled{background:#a5d6a7;color:white;}")
+        self.ne_start_btn.setStyleSheet(
+            f"QPushButton{{background:{_T['success']};color:white;border:none;border-radius:{_T['btn_radius']};"
+            f"padding:6px 14px;font-size:{_T['font_md']};font-weight:600;}}"
+            f"QPushButton:hover{{background:{_T['success_hover']};}}"
+            f"QPushButton:disabled{{background:#a5d6a7;color:white;}}"
+        )
         self.ne_start_btn.clicked.connect(self._do_ne_start)
-        svc_row.addWidget(self.ne_start_btn)
+        svc_col.addWidget(self.ne_start_btn)
         self.ne_stop_btn = QPushButton("⏹ Stop NE")
-        self.ne_stop_btn.setStyleSheet("QPushButton{background:#e67e22;color:white;border:none;border-radius:8px;padding:8px 24px;font-size:13px;font-weight:600;}QPushButton:hover{background:#d35400;}QPushButton:disabled{background:#f0c27a;color:white;}")
+        self.ne_stop_btn.setStyleSheet(
+            f"QPushButton{{background:{_T['warning']};color:white;border:none;border-radius:{_T['btn_radius']};"
+            f"padding:6px 14px;font-size:{_T['font_md']};font-weight:600;}}"
+            f"QPushButton:hover{{background:#e67e22;}}"
+            f"QPushButton:disabled{{background:#f0c27a;color:white;}}"
+        )
         self.ne_stop_btn.clicked.connect(self._do_ne_stop)
-        svc_row.addWidget(self.ne_stop_btn)
-        svc_row.addStretch()
-        layout.addLayout(svc_row)
+        svc_col.addWidget(self.ne_stop_btn)
+        svc_col.addStretch()
+        mid_row.addLayout(svc_col)
 
-        # Steps overview
-        steps_group = QGroupBox("Steps")
-        grid = QGridLayout(steps_group); grid.setSpacing(6)
+        # Steps pipeline
+        steps_layout = QVBoxLayout()
+        steps_layout.setSpacing(4)
+        step_names = [
+            ("1", "Stop"), ("2", "Backup"), ("3", "Upload"),
+            ("4", "Extract"), ("5", "PostExt"), ("6", "CfgDiff"),
+            ("7", "Chown"), ("8", "License"), ("9", "Start"),
+        ]
         self.up_step_labels = {}
-        step_names = ["1.Stop", "2.Backup", "3.Upload", "4.Extract", "5.PostExtract", "6.ConfigDiff", "7.Chown", "8.License", "9.Start"]
-        for i, sn in enumerate(step_names):
-            lbl = QLabel(f"⏳ {sn}")
-            lbl.setStyleSheet("background:#f8f9fa;border:1px solid #dfe6e9;border-radius:4px;padding:6px 10px;font-size:11px;")
-            grid.addWidget(lbl, i // 3, i % 3)
-            self.up_step_labels[sn.split(".")[0]] = lbl
-        layout.addWidget(steps_group)
+        for row_idx in range(3):
+            row_layout = QHBoxLayout()
+            row_layout.setSpacing(0)
+            for col_idx in range(3):
+                idx = row_idx * 3 + col_idx
+                if idx >= len(step_names):
+                    break
+                num, name = step_names[idx]
+                step_widget = QWidget()
+                step_widget.setFixedWidth(90)
+                step_widget.setFixedHeight(26)
+                sw_layout = QHBoxLayout(step_widget)
+                sw_layout.setContentsMargins(4, 0, 4, 0)
+                sw_layout.setSpacing(2)
+
+                circle = QLabel(num)
+                circle.setFixedSize(22, 22)
+                circle.setAlignment(Qt.AlignCenter)
+                circle.setStyleSheet(
+                    f"background:{_T['surface_alt']};color:{_T['text_secondary']};"
+                    f"border:2px solid {_T['border']};border-radius:11px;"
+                    f"font-size:{_T['font_sm']};font-weight:bold;"
+                )
+                sw_layout.addWidget(circle)
+
+                name_lbl = QLabel(name)
+                name_lbl.setStyleSheet(
+                    f"font-size:{_T['font_sm']};color:{_T['text_secondary']};"
+                    f"padding:0 2px;font-weight:500;"
+                )
+                sw_layout.addWidget(name_lbl)
+
+                self.up_step_labels[num] = {'circle': circle, 'label': name_lbl, 'widget': step_widget}
+                row_layout.addWidget(step_widget)
+                if col_idx < 2 and idx < len(step_names) - 1:
+                    arrow = QLabel("→")
+                    arrow.setStyleSheet(f"color:{_T['text_hint']};font-size:{_T['font_sm']};padding:0 2px;")
+                    row_layout.addWidget(arrow)
+            row_layout.addStretch()
+            steps_layout.addLayout(row_layout)
+        mid_row.addLayout(steps_layout, 1)
+        layout.addLayout(mid_row)
 
         # Control buttons
         ctrl_row = QHBoxLayout()
         self.up_start_btn = QPushButton("Start Upgrade")
-        self.up_start_btn.setStyleSheet(self._btn_primary("Start Upgrade", "#0984e3"))
+        self.up_start_btn.setStyleSheet(self._btn_primary("Start Upgrade", _T['primary']))
         self.up_start_btn.clicked.connect(self._do_upgrade)
         ctrl_row.addWidget(self.up_start_btn)
         self.up_stop_btn = QPushButton("Stop")
-        self.up_stop_btn.setStyleSheet("QPushButton{background:#f44336;color:white;border:none;border-radius:8px;padding:8px 24px;font-size:13px;font-weight:600;}QPushButton:hover{background:#d32f2f;}QPushButton:disabled{background:#ffcdd2;color:white;}")
+        self.up_stop_btn.setStyleSheet(
+            f"QPushButton{{background:{_T['danger']};color:white;border:none;border-radius:{_T['btn_radius']};"
+            f"padding:6px 14px;font-size:{_T['font_md']};font-weight:600;}}"
+            f"QPushButton:hover{{background:{_T['danger_hover']};}}"
+            f"QPushButton:disabled{{background:#ffcdd2;color:white;}}"
+        )
         self.up_stop_btn.clicked.connect(self._stop_upgrade)
         self.up_stop_btn.setEnabled(False)
         ctrl_row.addWidget(self.up_stop_btn)
         ctrl_row.addStretch()
         layout.addLayout(ctrl_row)
-        layout.addStretch()
-        self.tabs.addTab(tab, "升级")
+        return card
 
     def _load_ne_configs(self):
         try:
@@ -1433,10 +1631,13 @@ class IMSTool(QWidget):
 
         self._upgrading = True
         self.up_start_btn.setEnabled(False); self.up_stop_btn.setEnabled(True)
-        self.tabs.setTabEnabled(0, False); self.tabs.setTabEnabled(2, False)
-        for lbl in self.up_step_labels.values():
-            lbl.setStyleSheet("background:#f8f9fa;border:1px solid #dfe6e9;border-radius:4px;padding:6px 10px;font-size:11px;")
-            lbl.setText(lbl.text().replace("✅","⏳").replace("❌","⏳").replace("⬜","⏳"))
+        for info in self.up_step_labels.values():
+            circle = info['circle']
+            circle.setStyleSheet(
+                f"background:{_T['surface_alt']};color:{_T['text_secondary']};"
+                f"border:2px solid {_T['border']};border-radius:11px;"
+                f"font-size:{_T['font_sm']};font-weight:bold;"
+            )
         self.progress_bar.setVisible(True); self.progress_bar.setValue(0)
 
         patch_arg = patch_paths if patch_cfg.get("multiple") else patch_paths[0]
@@ -1493,18 +1694,27 @@ class IMSTool(QWidget):
         step_map = {"stop":"1","backup":"2","upload":"3","extract":"4","post_extract":"5","config_diff":"6","chown":"7","license":"8","start":"9"}
         num = step_map.get(step_key, "?")
         if num in self.up_step_labels:
-            self.up_step_labels[num].setStyleSheet("background:#fff3e6;border:1px solid #ff6900;border-radius:4px;padding:6px 10px;font-size:11px;font-weight:bold;")
+            info = self.up_step_labels[num]
+            circle = info['circle']
+            circle.setStyleSheet(
+                f"background:{_T['accent']};color:white;"
+                f"border:2px solid {_T['accent']};border-radius:11px;"
+                f"font-size:{_T['font_sm']};font-weight:bold;"
+            )
         steps = {"1":15,"2":25,"3":40,"4":55,"5":65,"6":75,"7":85,"8":90,"9":100}
         self.progress_bar.setValue(steps.get(num, 0))
 
     def _on_up_finished(self, status):
         self._upgrading = False; self.up_start_btn.setEnabled(True); self.up_stop_btn.setEnabled(False)
-        self.tabs.setTabEnabled(0, True); self.tabs.setTabEnabled(2, True)
         self.progress_bar.setVisible(False)
         if status == "success":
-            for lbl in self.up_step_labels.values():
-                if "⏳" in lbl.text():
-                    lbl.setText(lbl.text().replace("⏳","✅"))
+            for info in self.up_step_labels.values():
+                circle = info['circle']
+                circle.setStyleSheet(
+                    f"background:{_T['success']};color:white;"
+                    f"border:2px solid {_T['success']};border-radius:11px;"
+                    f"font-size:{_T['font_sm']};font-weight:bold;"
+                )
         self._log(f"[upgrade] Finished: {status}")
         self._update_upgrade_button_state()
 
@@ -1533,40 +1743,60 @@ class IMSTool(QWidget):
     # ═══════════════════════════════════════════════
 
     def _init_log_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(12, 12, 12, 12)
+        card = QFrame()
+        card.setStyleSheet(
+            f"QFrame{{background:{_T['surface']};border:1px solid {_T['border']};"
+            f"border-radius:{_T['card_radius']};}}"
+        )
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(6)
+
+        # Section header
+        header = QLabel("日志 Log")
+        header.setStyleSheet(f"font-size:{_T['font_lg']};font-weight:bold;color:{_T['text']};padding-bottom:2px;")
+        layout.addWidget(header)
 
         # Top bar
         top_bar = QHBoxLayout()
+        top_bar.setSpacing(6)
         self.log_ne_combo = QComboBox()
         self.log_ne_configs = self._load_log_ne_configs()
         for log_ne_type, lc in self.log_ne_configs.items():
             self.log_ne_combo.addItem(log_ne_type, lc)
-        top_bar.addWidget(QLabel("NE Type:")); top_bar.addWidget(self.log_ne_combo)
+        top_bar.addWidget(QLabel("NE:"))
+        top_bar.addWidget(self.log_ne_combo)
 
-        self.log_connect_btn = QPushButton("Connect & Load")
-        self.log_connect_btn.setStyleSheet("QPushButton{background:#0984e3;color:white;border:none;border-radius:4px;padding:6px 18px;font-size:13px;font-weight:bold;}QPushButton:hover{background:#0873c4;}")
+        self.log_connect_btn = QPushButton("Connect")
+        self.log_connect_btn.setStyleSheet(
+            f"QPushButton{{background:{_T['primary']};color:white;border:none;border-radius:{_T['btn_radius']};"
+            f"padding:5px 14px;font-size:{_T['font_md']};font-weight:600;}}"
+            f"QPushButton:hover{{background:{_T['primary_hover']};}}"
+        )
         self.log_connect_btn.clicked.connect(self._do_log_connect)
         top_bar.addWidget(self.log_connect_btn)
         self.log_refresh_btn = QPushButton("Refresh")
-        self.log_refresh_btn.setStyleSheet("QPushButton{background:#f5f5f5;color:#1a1a1a;border:1px solid #e0e0e0;border-radius:8px;padding:7px 16px;font-size:12px;}QPushButton:hover{background:#eee;}")
+        self.log_refresh_btn.setStyleSheet(self._btn_secondary())
         self.log_refresh_btn.clicked.connect(self._do_log_refresh)
         top_bar.addWidget(self.log_refresh_btn)
         top_bar.addStretch()
         self.log_status = QLabel("● Disconnected")
-        self.log_status.setStyleSheet("color:#e74c3c;font-weight:bold;font-size:13px;")
+        self.log_status.setStyleSheet(f"color:{_T['danger']};font-weight:bold;font-size:{_T['font_md']};")
         top_bar.addWidget(self.log_status)
         layout.addLayout(top_bar)
 
         # Nav bar
         nav_bar = QHBoxLayout()
         self.log_up_btn = QPushButton("▲ Up")
-        self.log_up_btn.setStyleSheet("QPushButton{background:#f5f5f5;color:#1a1a1a;border:1px solid #e0e0e0;border-radius:8px;padding:6px 16px;font-size:12px;}QPushButton:hover{background:#eee;}")
+        self.log_up_btn.setStyleSheet(self._btn_secondary())
         self.log_up_btn.clicked.connect(self._log_nav_up)
         nav_bar.addWidget(self.log_up_btn)
         self.log_path_label = QLabel("/")
-        self.log_path_label.setStyleSheet("font-size:12px;color:#636e72;padding:4px 8px;")
+        self.log_path_label.setStyleSheet(
+            f"font-size:{_T['font_sm']};color:{_T['text_secondary']};"
+            f"padding:3px 6px;background:{_T['surface']};border:1px solid {_T['border']};"
+            f"border-radius:4px;"
+        )
         nav_bar.addWidget(self.log_path_label, 1)
         layout.addLayout(nav_bar)
 
@@ -1574,59 +1804,64 @@ class IMSTool(QWidget):
         self.log_table = QTableWidget(0, 6)
         self.log_table.setHorizontalHeaderLabels(["", "Remote Path", "Description", "Filename", "Size", "Actions"])
         self.log_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
-        self.log_table.setColumnWidth(0, 40)
+        self.log_table.setColumnWidth(0, 36)
         self.log_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.log_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.log_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.log_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.log_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Fixed)
-        self.log_table.setColumnWidth(5, 180)
+        self.log_table.setColumnWidth(5, 160)
         self.log_table.verticalHeader().setVisible(False)
-        self.log_table.verticalHeader().setDefaultSectionSize(34)
-        self.log_table.verticalHeader().setMinimumSectionSize(34)
+        self.log_table.verticalHeader().setDefaultSectionSize(32)
+        self.log_table.verticalHeader().setMinimumSectionSize(32)
         self.log_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.log_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.log_table.setAlternatingRowColors(True)
-        self.log_table.setStyleSheet("""
-            QTableWidget {
-                background:white;
-                alternate-background-color:#fbfcfd;
-                border:1px solid #dfe7ec;
-                border-radius:8px;
-                gridline-color:#edf1f4;
-                selection-background-color:#e8f1f6;
-                selection-color:#1f2933;
-            }
-            QTableWidget::item {
-                padding:6px 8px;
+        self.log_table.cellDoubleClicked.connect(lambda row, column: self._log_activate_row(row))
+        self.log_table.installEventFilter(self)
+        self.log_table.viewport().installEventFilter(self)
+        self.log_table.setStyleSheet(f"""
+            QTableWidget {{
+                background:{_T['surface']};
+                alternate-background-color:{_T['surface_alt']};
+                border:1px solid {_T['border']};
+                border-radius:{_T['card_radius']};
+                gridline-color:{_T['border_light']};
+                selection-background-color:{_T['primary_light']};
+                selection-color:{_T['text']};
+            }}
+            QTableWidget::item {{
+                padding:4px 6px;
                 border:none;
-                color:#1f2933;
-            }
-            QTableWidget::item:hover {
-                background:#f3f7fa;
-                color:#1f2933;
-            }
+                color:{_T['text']};
+            }}
+            QTableWidget::item:hover {{
+                background:{_T['surface_alt']};
+                color:{_T['text']};
+            }}
             QTableWidget::item:selected,
             QTableWidget::item:selected:active,
-            QTableWidget::item:selected:!active {
-                background:#e8f1f6;
-                color:#1f2933;
-            }
-            QHeaderView::section {
-                background:#f8fafb;
-                color:#344054;
+            QTableWidget::item:selected:!active {{
+                background:{_T['primary_light']};
+                color:{_T['text']};
+            }}
+            QHeaderView::section {{
+                background:{_T['surface_alt']};
+                color:{_T['text_secondary']};
                 border:none;
-                border-bottom:1px solid #dfe7ec;
-                padding:8px;
+                border-bottom:1px solid {_T['border']};
+                padding:6px;
                 font-weight:600;
-            }
+                font-size:{_T['font_sm']};
+            }}
         """)
         log_toolbar = QHBoxLayout()
+        log_toolbar.setSpacing(6)
         self.log_select_all_cb = QCheckBox("Select All")
         self.log_select_all_cb.toggled.connect(self._log_select_all)
         log_toolbar.addWidget(self.log_select_all_cb)
         self.log_download_selected_btn = QPushButton("Download Selected")
-        self.log_download_selected_btn.setStyleSheet("QPushButton{background:#00b894;color:white;border:none;border-radius:4px;padding:5px 14px;font-size:11px;font-weight:bold;}QPushButton:hover{background:#00a381;}QPushButton:disabled{background:#b2dfdb;color:white;}")
+        self.log_download_selected_btn.setStyleSheet(self._btn_success())
         self.log_download_selected_btn.clicked.connect(self._log_download)
         self.log_download_selected_btn.setEnabled(False)
         log_toolbar.addWidget(self.log_download_selected_btn)
@@ -1638,7 +1873,11 @@ class IMSTool(QWidget):
         tail_bar = QHBoxLayout()
         tail_bar.addStretch()
         self.log_stop_tail_btn = QPushButton("⬛ Stop Tail")
-        self.log_stop_tail_btn.setStyleSheet("QPushButton{background:#e74c3c;color:white;border:none;border-radius:4px;padding:4px 14px;font-size:11px;font-weight:bold;}QPushButton:hover{background:#c0392b;}")
+        self.log_stop_tail_btn.setStyleSheet(
+            f"QPushButton{{background:{_T['danger']};color:white;border:none;border-radius:4px;"
+            f"padding:4px 14px;font-size:{_T['font_sm']};font-weight:600;}}"
+            f"QPushButton:hover{{background:{_T['danger_hover']};}}"
+        )
         self.log_stop_tail_btn.clicked.connect(self._log_stop_tail)
         self.log_stop_tail_btn.setVisible(False)
         tail_bar.addWidget(self.log_stop_tail_btn)
@@ -1649,15 +1888,18 @@ class IMSTool(QWidget):
         self.log_tail_view.setReadOnly(True)
         self.log_tail_view.setFont(QFont("Consolas", 10))
         self.log_tail_view.setMinimumHeight(60)
-        self.log_tail_view.setMaximumHeight(120)
-        self.log_tail_view.setStyleSheet("QTextEdit{background:#1e1e1e;color:#d4d4d4;border:1px solid #e0e0e0;border-radius:8px;padding:8px;font-size:11px;}")
+        self.log_tail_view.setMaximumHeight(150)
+        self.log_tail_view.setStyleSheet(
+            f"QTextEdit{{background:#1e1e1e;color:#d4d4d4;border:1px solid {_T['border']};"
+            f"border-radius:{_T['card_radius']};padding:8px;font-size:{_T['font_sm']};}}"
+        )
         self.log_tail_view.setVisible(False)
         layout.addWidget(self.log_tail_view)
 
         self._log_browse_path = ""
         self._log_root_paths = set()
         self._log_tail_path = ""
-        self.tabs.addTab(tab, "日志")
+        return card
 
     def _load_log_ne_configs(self):
         try:
@@ -1839,7 +2081,21 @@ class IMSTool(QWidget):
     def _log_view_file(self):
         rows = self._get_log_selected_rows()
         if not rows: return
-        info = self._log_file_list[rows[0]]
+        self._log_open_info(self._log_file_list[rows[0]])
+
+    def _log_activate_current_row(self):
+        row = self.log_table.currentRow()
+        if row < 0:
+            selected = self.log_table.selectionModel().selectedRows()
+            row = selected[0].row() if selected else -1
+        self._log_activate_row(row)
+
+    def _log_activate_row(self, row):
+        if row < 0 or row >= len(getattr(self, "_log_file_list", [])):
+            return
+        self._log_open_info(self._log_file_list[row])
+
+    def _log_open_info(self, info):
         if info.get("type") == "directory":
             self._browse_log_path(info["path"])
         elif info.get("type") == "group" and len(info.get("group_files",[])) == 1:
@@ -2964,8 +3220,9 @@ class LogListWorker(QThread):
     def _group_files(file_list):
         groups = defaultdict(list)
         for fp in file_list:
-            bn = os.path.basename(fp)
-            dn = os.path.dirname(fp)
+            clean_fp = fp.rstrip("/")
+            bn = posixpath.basename(clean_fp)
+            dn = posixpath.dirname(clean_fp)
             if '.' in bn:
                 name, ext = bn.rsplit('.', 1); ext = '.' + ext
             else:
@@ -2995,30 +3252,36 @@ class LogListWorker(QThread):
                         matches = [l.strip() for l in out.split("\n") if l.strip()]
                         groups = self._group_files(matches)
                         for (gdir, stem, ext), files in sorted(groups.items()):
-                            pattern = f"{stem}*{ext}" if stem != os.path.basename(files[0]) else os.path.basename(files[0])
+                            first_name = posixpath.basename(files[0].rstrip("/"))
+                            pattern = f"{stem}*{ext}" if stem != first_name else first_name
                             self.file_info.emit({
                                 "path": gdir, "name": pattern, "size": len(files),
                                 "type": "group", "group_files": sorted(files),
                                 "pattern_path": f"{gdir}/{pattern}", "desc": desc
                             })
                     else:
-                        self.file_info.emit({"path": fpath, "name": os.path.basename(fpath), "size": 0, "type": "file", "missing": True, "desc": desc})
+                        name = posixpath.basename(fpath.rstrip("/")) or fpath
+                        self.file_info.emit({"path": fpath, "name": name, "size": 0, "type": "file", "missing": True, "desc": desc})
                 else:
-                    out, _ = self._exec(c, f"stat --format='%s' {fpath} 2>/dev/null || echo MISSING")
+                    qpath = _shell_quote(fpath)
+                    name = posixpath.basename(fpath.rstrip("/")) or fpath
+                    out, _ = self._exec(c, f"stat --format='%s' {qpath} 2>/dev/null || echo MISSING")
                     if out and out.strip() != "MISSING":
                         try: sz = int(out.strip().split("\n")[0])
                         except: sz = 0
-                        self.file_info.emit({"path": fpath, "name": os.path.basename(fpath), "size": sz, "type": "file", "desc": desc})
+                        self.file_info.emit({"path": fpath, "name": name, "size": sz, "type": "file", "desc": desc})
                     else:
-                        self.file_info.emit({"path": fpath, "name": os.path.basename(fpath), "size": 0, "type": "file", "missing": True, "desc": desc})
+                        self.file_info.emit({"path": fpath, "name": name, "size": 0, "type": "file", "missing": True, "desc": desc})
 
             for entry in self.ne.get("directories", []):
                 dpath, desc = _resolve_entry(entry)
-                out, _ = self._exec(c, f"test -d {dpath} && echo OK || echo MISSING")
+                qpath = _shell_quote(dpath.rstrip("/") or "/")
+                name = posixpath.basename(dpath.rstrip("/")) or dpath.rstrip("/") or "/"
+                out, _ = self._exec(c, f"test -d {qpath} && echo OK || echo MISSING")
                 if out and out.strip() == "OK":
-                    self.file_info.emit({"path": dpath, "name": os.path.basename(dpath)+"/", "size": 0, "type": "directory", "desc": desc})
+                    self.file_info.emit({"path": dpath, "name": name + "/", "size": 0, "type": "directory", "desc": desc})
                 else:
-                    self.file_info.emit({"path": dpath, "name": os.path.basename(dpath)+"/", "size": 0, "type": "directory", "missing": True, "desc": desc})
+                    self.file_info.emit({"path": dpath, "name": name + "/", "size": 0, "type": "directory", "missing": True, "desc": desc})
 
             c.close()
             self.finished.emit()
@@ -3037,12 +3300,14 @@ class LogBrowseWorker(QThread):
             stdin, stdout, stderr = c.exec_command(f"find {qpath} -maxdepth 1 -mindepth 1 -type d -print 2>/dev/null | sort | head -200")
             dirs = [line.strip() for line in stdout.read().decode("utf-8",errors="replace").split("\n") if line.strip()]
             for d in dirs:
-                self.file_info.emit({"path": d, "name": os.path.basename(d)+"/", "size": 0, "type": "directory", "desc": ""})
+                name = posixpath.basename(d.rstrip("/")) or d.rstrip("/") or "/"
+                self.file_info.emit({"path": d, "name": name + "/", "size": 0, "type": "directory", "desc": ""})
             stdin, stdout, stderr = c.exec_command(f"find {qpath} -maxdepth 1 -mindepth 1 -type f -print 2>/dev/null | sort | head -500")
             files = [line.strip() for line in stdout.read().decode("utf-8",errors="replace").split("\n") if line.strip()]
             groups = LogListWorker._group_files(files)
             for (gdir, stem, ext), group_files in sorted(groups.items()):
-                pattern = f"{stem}*{ext}" if stem != os.path.basename(group_files[0]) else os.path.basename(group_files[0])
+                first_name = posixpath.basename(group_files[0].rstrip("/"))
+                pattern = f"{stem}*{ext}" if stem != first_name else first_name
                 self.file_info.emit({
                     "path": gdir, "name": pattern, "size": len(group_files),
                     "type": "group", "group_files": sorted(group_files),

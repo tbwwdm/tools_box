@@ -641,9 +641,11 @@ class _SelectAllHeader(QHeaderView):
 class LinuxToolsGUI(QWidget):
     _gui_log_signal = Signal(str)
 
-    def __init__(self):
+    def __init__(self, lang="zh"):
         super().__init__()
-        self.setWindowTitle("Linux 工具集")
+        self.lang = lang
+        title = "Linux Tools Suite" if self.lang == "en" else "Linux 工具集"
+        self.setWindowTitle(title)
         self.resize(1000, 700)
         self._excel_path = ""
         self._tab_pages = []
@@ -715,7 +717,7 @@ class LinuxToolsGUI(QWidget):
         # ===== 4. 执行 / 取消 =====
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        self._run_btn = QPushButton("▶ 执行")
+        self._run_btn = QPushButton("▶ Run" if self.lang == "en" else "▶ 执行")
         self._run_btn.setStyleSheet(
             "QPushButton{background:#27ae60;color:white;padding:7px 18px;"
             "border:none;border-radius:4px;font-size:13px;}"
@@ -724,7 +726,7 @@ class LinuxToolsGUI(QWidget):
         self._run_btn.clicked.connect(self._start)
         btn_row.addWidget(self._run_btn)
 
-        self._cancel_btn = QPushButton("✕ 取消")
+        self._cancel_btn = QPushButton("✕ Cancel" if self.lang == "en" else "✕ 取消")
         self._cancel_btn.setEnabled(False)
         self._cancel_btn.setStyleSheet(
             "QPushButton{background:#e74c3c;color:white;padding:7px 18px;"
@@ -734,7 +736,7 @@ class LinuxToolsGUI(QWidget):
         self._cancel_btn.clicked.connect(self._cancel)
         btn_row.addWidget(self._cancel_btn)
 
-        self._copy_btn = QPushButton("复制日志")
+        self._copy_btn = QPushButton("Copy Log" if self.lang == "en" else "复制日志")
         self._copy_btn.setStyleSheet(
             "QPushButton{background:#636e72;color:white;padding:7px 18px;"
             "border:none;border-radius:4px;font-size:13px;}"
@@ -742,7 +744,7 @@ class LinuxToolsGUI(QWidget):
         self._copy_btn.clicked.connect(self._copy_log)
         btn_row.addWidget(self._copy_btn)
 
-        self._clear_btn = QPushButton("清空日志")
+        self._clear_btn = QPushButton("Clear Log" if self.lang == "en" else "清空日志")
         self._clear_btn.setStyleSheet(
             "QPushButton{background:#e74c3c;color:white;padding:7px 18px;"
             "border:none;border-radius:4px;font-size:13px;}"

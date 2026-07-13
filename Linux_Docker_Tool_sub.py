@@ -4,7 +4,7 @@ Docker 远程管理工具  v2.12.1
 通过SSH连接远程服务器，管理Docker容器、网络等
 """
 
-import sys, os, logging, threading, time, json
+import sys, os, logging, threading, time, json, shlex
 from datetime import datetime
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
@@ -96,13 +96,14 @@ class DockerSSHWorker(QThread):
     output_ready = Signal(str)
     data_ready = Signal(dict)
 
-    def __init__(self, host, port, username, password, commands=None, parent=None):
+    def __init__(self, host, port, username, password, commands=None, parent=None, command_timeout=60):
         super().__init__(parent)
         self.host = host
         self.port = port
         self.username = username
         self.password = password
         self.commands = commands or []
+        self.command_timeout = command_timeout
         self._stopped = False
 
     def stop(self):
@@ -123,10 +124,11 @@ class DockerSSHWorker(QThread):
                     if self._stopped:
                         break
                     self.output_ready.emit(f"▶ 执行: {cmd}")
-                    stdin, stdout, stderr = client.exec_command(cmd, timeout=60)
+                    stdin, stdout, stderr = client.exec_command(cmd, timeout=self.command_timeout)
                     out = stdout.read().decode("utf-8", errors="replace").strip()
                     err = stderr.read().decode("utf-8", errors="replace").strip()
-                    results.append({"cmd": cmd, "stdout": out, "stderr": err})
+                    rc = stdout.channel.recv_exit_status()
+                    results.append({"cmd": cmd, "stdout": out, "stderr": err, "exit_status": rc})
                     if out:
                         for line in out.split("\n")[:5]:
                             self.output_ready.emit(f"  {line}")
@@ -300,9 +302,11 @@ class _ComboHoverDelegate(QStyledItemDelegate):
 
 
 class CreateNetworkDialog(QDialog):
-    def __init__(self, parent, interfaces, existing_networks, existing_subnets):
+    def __init__(self, parent, interfaces, existing_networks, existing_subnets, lang="zh"):
         super().__init__(parent)
-        self.setWindowTitle("🌐 创建网络")
+        self.lang = lang
+        title = "Create Network" if self.lang == "en" else "🌐 创建网络"
+        self.setWindowTitle(title)
         self.setMinimumWidth(520)
         self.interfaces = interfaces
         self.existing_networks = set(n["name"] for n in existing_networks)
@@ -310,6 +314,10 @@ class CreateNetworkDialog(QDialog):
         self._command = None
         self._build_ui()
         self._populate_combos()
+
+    def _tr(self, zh, en):
+        """根据 self.lang 返回对应文本"""
+        return en if self.lang == 'en' else zh
 
     def _build_ui(self):
         fl = QFormLayout(self)
@@ -340,17 +348,17 @@ class CreateNetworkDialog(QDialog):
         name_row.addWidget(self.net_name)
         name_row.addWidget(self.net_name_warn)
         name_row.addStretch()
-        fl.addRow(_req("网络名称"), name_row)
+        fl.addRow(self._tr("网络名称", "Network Name"), name_row)
 
         self.net_driver = QComboBox()
         self.net_driver.addItems(["macvlan", "bridge", "overlay", "ipvlan"])
         self.net_driver.setFixedWidth(input_max)
-        fl.addRow(_req("驱动类型"), self.net_driver)
+        fl.addRow(self._tr("驱动类型", "Driver Type"), self.net_driver)
 
         self.net_nic = QComboBox()
         self.net_nic.setFixedWidth(input_max)
         self.net_nic.currentTextChanged.connect(self._check_ready)
-        fl.addRow(_req("物理网卡"), self.net_nic)
+        fl.addRow(self._tr("物理网卡", "Network Interface"), self.net_nic)
 
         self._style_combos()
 
@@ -425,7 +433,7 @@ class CreateNetworkDialog(QDialog):
         self.create_btn.clicked.connect(self._do_create)
         self.create_btn.setEnabled(False)
         btn_row.addWidget(self.create_btn)
-        cancel_btn = QPushButton("取消")
+        cancel_btn = QPushButton(self._tr(self._tr("取消", "Cancel"), "Cancel"))
         cancel_btn.setStyleSheet(STYLE_BTN_CANCEL)
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
@@ -586,9 +594,11 @@ class CreateNetworkDialog(QDialog):
         return self.net_name.text().strip()
 
 class CreateContainerDialog(QDialog):
-    def __init__(self, parent, images, networks):
+    def __init__(self, parent, images, networks, lang="zh"):
         super().__init__(parent)
-        self.setWindowTitle("创建容器")
+        self.lang = lang
+        title = "Create Container" if self.lang == "en" else "创建容器"
+        self.setWindowTitle(title)
         self.setMinimumWidth(520)
         self._command = None
         self._name_manually_edited = False
@@ -620,14 +630,14 @@ class CreateContainerDialog(QDialog):
         type_row.setContentsMargins(0, 0, 0, 0)
         type_row.setSpacing(16)
         self.cont_type = QButtonGroup(self)
-        for label, val in [("普通(无限制)", 1), ("普通(限制)", 2), ("DB", 3)]:
+        for label, val in [(self._tr("普通(无限制)", "Normal (Unlimited)"), 1), (self._tr("普通(限制)", "Normal (Limited)"), 2), (self._tr("DB", "DB"), 3)]:
             rb = QRadioButton(label)
             rb.setStyleSheet("font-size: 13px;")
             type_row.addWidget(rb)
             self.cont_type.addButton(rb, val)
         self.cont_type.button(1).setChecked(True)
         self.cont_type.idClicked.connect(self._type_changed)
-        fl.addRow("容器类型:", self.type_group)
+        fl.addRow(self._tr("容器类型:", "Container Type:"), self.type_group)
 
         # ── 主机名称 ──
         self.cont_hostname = QLineEdit()
@@ -635,7 +645,7 @@ class CreateContainerDialog(QDialog):
         self.cont_hostname.setStyleSheet(STYLE_INPUT)
         self.cont_hostname.setFixedWidth(input_max)
         self.cont_hostname.textChanged.connect(self._on_hostname_changed)
-        fl.addRow(_req("主机名称"), self.cont_hostname)
+        fl.addRow(self._tr("主机名称", "Hostname"), self.cont_hostname)
 
         # ── 容器名称 ──
         self.cont_name = QLineEdit()
@@ -651,7 +661,11 @@ class CreateContainerDialog(QDialog):
         name_row.addWidget(self.cont_name)
         name_row.addWidget(self.cont_name_warn)
         name_row.addStretch()
-        fl.addRow(_req("容器名称"), name_row)
+        fl.addRow(self._tr("容器名称", "Container Name"), name_row)
+
+    def _tr(self, zh, en):
+        """根据 self.lang 返回对应文本"""
+        return en if self.lang == 'en' else zh
 
         # ── 网络 ──
         self.cont_net = QComboBox()
@@ -661,7 +675,7 @@ class CreateContainerDialog(QDialog):
             self.cont_net.addItem(n.get("name", ""))
         self.cont_net.setCurrentIndex(-1)
         self.cont_net.currentTextChanged.connect(self._check_ready)
-        fl.addRow(_req("网络"), self.cont_net)
+        fl.addRow(self._tr("网络", "Network"), self.cont_net)
 
         # ── IPv4 ──
         self.cont_ip = QLineEdit()
@@ -676,13 +690,13 @@ class CreateContainerDialog(QDialog):
         ip_row.addWidget(self.cont_ip)
         ip_row.addWidget(self.cont_ip_warn)
         ip_row.addStretch()
-        fl.addRow(_req("指定IPv4"), ip_row)
+        fl.addRow(self._tr("指定IPv4", "Specify IPv4"), ip_row)
 
         # ── IPv6 ──
-        self.cont_ip6_cb = QCheckBox("指定IPv6")
+        self.cont_ip6_cb = QCheckBox(self._tr("指定IPv6", "Specify IPv6"))
         self.cont_ip6_cb.setStyleSheet("QCheckBox { padding: 4px 8px; }")
         self.cont_ip6_cb.toggled.connect(self._toggle_ipv6)
-        self._lbl_ip6 = _lbl("IPv6地址")
+        self._lbl_ip6 = self._tr("IPv6地址", "IPv6 Address")
         self.cont_ip6 = QLineEdit()
         self.cont_ip6.setPlaceholderText("例如: 2001:14:23::24")
         self.cont_ip6.setStyleSheet(STYLE_INPUT)
@@ -708,7 +722,7 @@ class CreateContainerDialog(QDialog):
             tag = img.get("tag", "latest")
             self.cont_image.addItem(f"{img.get('repo', '')}:{tag}")
         self.cont_image.currentTextChanged.connect(self._check_ready)
-        fl.addRow(_req("镜像"), self.cont_image)
+        fl.addRow(self._tr("镜像", "Image"), self.cont_image)
 
         # ── CPU ──
         self.cont_cpu = QLineEdit()
@@ -806,13 +820,13 @@ class CreateContainerDialog(QDialog):
         n2_ip_row.addWidget(self.nic2_ip)
         n2_ip_row.addWidget(self.nic2_ip_warn)
         n2_ip_row.addStretch()
-        n2l.addRow(_req("指定IPv4"), n2_ip_row)
+        n2l.addRow(self._tr("指定IPv4", "Specify IPv4"), n2_ip_row)
 
-        self.nic2_ip6_cb = QCheckBox("指定IPv6")
+        self.nic2_ip6_cb = QCheckBox(self._tr("指定IPv6", "Specify IPv6"))
         self.nic2_ip6_cb.setStyleSheet("QCheckBox { padding: 4px 8px; }")
         self.nic2_ip6_cb.toggled.connect(self._toggle_nic2_ipv6)
 
-        self._lbl_nic2_ip6 = _lbl("IPv6地址")
+        self._lbl_nic2_ip6 = self._tr("IPv6地址", "IPv6 Address")
         self.nic2_ip6 = QLineEdit()
         self.nic2_ip6.setPlaceholderText("例如: 2001:14:23::25")
         self.nic2_ip6.setStyleSheet(STYLE_INPUT)
@@ -841,7 +855,7 @@ class CreateContainerDialog(QDialog):
         self.create_btn.clicked.connect(self._do_create)
         self.create_btn.setEnabled(False)
         btn_row.addWidget(self.create_btn)
-        cancel_btn = QPushButton("取消")
+        cancel_btn = QPushButton(self._tr(self._tr("取消", "Cancel"), "Cancel"))
         cancel_btn.setStyleSheet(STYLE_BTN_CANCEL)
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
@@ -1104,10 +1118,12 @@ class CreateContainerDialog(QDialog):
         self.create_btn.setEnabled(ok)
 
     def _do_create(self):
-        cmd = "docker run -d"
+        cmd = "docker run -tid"
+        cmd += " -e \"container=docker\""
         name = self.cont_name.text().strip() or self.cont_hostname.text().strip()
         cmd += f" --name {name}"
         cmd += f" --hostname {self.cont_hostname.text().strip()}"
+        cmd += " --privileged --cap-drop=SYS_BOOT"
         cmd += f" --restart {self.cont_restart.currentText().strip()}"
         net = self.cont_net.currentText().strip()
         cmd += f" --network {net}"
@@ -1135,7 +1151,7 @@ class CreateContainerDialog(QDialog):
                 if v:
                     cmd += f" -v {v}"
         image = self.cont_image.currentText().strip()
-        cmd += f" {image}"
+        cmd += f" {image} /usr/sbin/init"
         if self.nic2_cb.isChecked():
             n2_net = self.nic2_net.currentText().strip()
             if n2_net:
@@ -1204,7 +1220,7 @@ class AddNicDialog(QDialog):
             self.nic_network.addItem(n.get("name", ""))
         self.nic_network.setCurrentIndex(-1)
         self.nic_network.currentTextChanged.connect(self._check_ready)
-        fl.addRow(_req("网络"), self.nic_network)
+        fl.addRow(self._tr("网络", "Network"), self.nic_network)
 
         # ── IPv4 ──
         self.nic_ip = QLineEdit()
@@ -1219,13 +1235,13 @@ class AddNicDialog(QDialog):
         ip_row.addWidget(self.nic_ip)
         ip_row.addWidget(self.nic_ip_warn)
         ip_row.addStretch()
-        fl.addRow(_req("指定IPv4"), ip_row)
+        fl.addRow(self._tr("指定IPv4", "Specify IPv4"), ip_row)
 
         # ── IPv6 ──
-        self.nic_ip6_cb = QCheckBox("指定IPv6")
+        self.nic_ip6_cb = QCheckBox(self._tr("指定IPv6", "Specify IPv6"))
         self.nic_ip6_cb.setStyleSheet("QCheckBox { padding: 4px 8px; }")
         self.nic_ip6_cb.toggled.connect(self._toggle_nic_ipv6)
-        self._lbl_nic_ip6 = _lbl("IPv6地址")
+        self._lbl_nic_ip6 = self._tr("IPv6地址", "IPv6 Address")
         self.nic_ip6 = QLineEdit()
         self.nic_ip6.setPlaceholderText("例如: 2001:14:23::25")
         self.nic_ip6.setStyleSheet(STYLE_INPUT)
@@ -1252,7 +1268,7 @@ class AddNicDialog(QDialog):
         self.ok_btn.clicked.connect(self._do_add)
         self.ok_btn.setEnabled(False)
         btn_row.addWidget(self.ok_btn)
-        cancel_btn = QPushButton("取消")
+        cancel_btn = QPushButton(self._tr(self._tr("取消", "Cancel"), "Cancel"))
         cancel_btn.setStyleSheet(STYLE_BTN_CANCEL)
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
@@ -1700,7 +1716,7 @@ class BatchImportDialog(QDialog):
         self.import_btn.clicked.connect(self._do_import)
         self.import_btn.setEnabled(False)
         btn_row.addWidget(self.import_btn)
-        cancel_btn = QPushButton("取消")
+        cancel_btn = QPushButton(self._tr(self._tr("取消", "Cancel"), "Cancel"))
         cancel_btn.setStyleSheet(STYLE_BTN_CANCEL)
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
@@ -1853,7 +1869,7 @@ class BatchImportDialog(QDialog):
 
         confirm_btn = QPushButton("确认")
         confirm_btn.setStyleSheet(STYLE_BTN_PRIMARY)
-        cancel_btn = QPushButton("取消")
+        cancel_btn = QPushButton(self._tr(self._tr("取消", "Cancel"), "Cancel"))
         cancel_btn.setStyleSheet(STYLE_BTN_CANCEL)
         btn_bar.addWidget(confirm_btn)
         btn_bar.addWidget(cancel_btn)
@@ -2311,7 +2327,7 @@ class BatchImportDialog(QDialog):
         cmd = "docker run -tid"
         cmd += " -e \"container=docker\""
         cmd += f" --name {name} --hostname {hostname}"
-        cmd += " --privileged"
+        cmd += " --privileged --cap-drop=SYS_BOOT"
         cmd += f" --restart {restart}"
         cmd += f" --network={net}"
         if ip:
@@ -2861,9 +2877,11 @@ class LoadProgressDialog(QDialog):
 
 
 class DockerManager(QWidget):
-    def __init__(self):
+    def __init__(self, lang="zh"):
         super().__init__()
-        self.setWindowTitle("Docker 远程管理")
+        self.lang = lang
+        title = "Docker Manager" if self.lang == "en" else "Docker 远程管理"
+        self.setWindowTitle(title)
         self.resize(1500, 950)
         self.setMinimumSize(800, 600)
 
@@ -2902,6 +2920,10 @@ class DockerManager(QWidget):
             self.img_upload_btn, self.img_load_btn, self.img_del_btn,
         ] + self.service_buttons
         self._update_button_states(False)
+    def _tr(self, zh, en):
+        """根据 self.lang 返回对应文本"""
+        return en if self.lang == 'en' else zh
+
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -2942,7 +2964,7 @@ class DockerManager(QWidget):
         layout.setSpacing(8)
 
         layout.addWidget(QLabel("🔗"))
-        layout.addWidget(QLabel("主机:"))
+        layout.addWidget(QLabel(self._tr("主机:", "Host:")))
 
         self.host_combo = QComboBox()
         self.host_combo.setMinimumWidth(280)
@@ -2970,7 +2992,7 @@ class DockerManager(QWidget):
         self._refresh_host_combo()
         layout.addWidget(self.host_combo)
 
-        manage_btn = QPushButton("管理")
+        manage_btn = QPushButton(self._tr("管理", "Manage"))
         manage_btn.setFixedHeight(34)
         manage_btn.setStyleSheet("""
             QPushButton {
@@ -2982,13 +3004,13 @@ class DockerManager(QWidget):
         manage_btn.clicked.connect(self._manage_hosts)
         layout.addWidget(manage_btn)
 
-        self.connect_btn = QPushButton("连接")
+        self.connect_btn = QPushButton(self._tr("连接", "Connect"))
         self.connect_btn.setFixedHeight(34)
         self.connect_btn.setStyleSheet(STYLE_BTN_PRIMARY)
         self.connect_btn.clicked.connect(self._toggle_connection)
         layout.addWidget(self.connect_btn)
 
-        self.refresh_btn = QPushButton("刷新")
+        self.refresh_btn = QPushButton(self._tr("刷新", "Refresh"))
         self.refresh_btn.setFixedHeight(34)
         self.refresh_btn.setStyleSheet(STYLE_BTN_SUCCESS)
         self.refresh_btn.clicked.connect(self._refresh_data)
@@ -2997,7 +3019,7 @@ class DockerManager(QWidget):
 
         layout.addStretch()
 
-        self.status_indicator = QLabel("● 未连接")
+        self.status_indicator = QLabel(self._tr("● 未连接", "● Disconnected"))
         self.status_indicator.setStyleSheet(f"{STYLE_DISCONNECTED}; font-size: 13px;")
         layout.addWidget(self.status_indicator)
 
@@ -3167,9 +3189,9 @@ class DockerManager(QWidget):
             self.status_cards[key] = val
             return card
 
-        status_row.addWidget(_make_card("服务状态", "service_status", "● 未知"))
+        status_row.addWidget(_make_card(self._tr("服务状态", "Service Status"), "service_status", "● 未知"))
         status_row.addStretch(1)
-        status_row.addWidget(_make_card("开机自启", "service_enabled", "未知"))
+        status_row.addWidget(_make_card(self._tr("开机自启", "Auto-start"), "service_enabled", "未知"))
         status_row.addStretch(1)
 
         # Docker版本 badge
@@ -3178,7 +3200,7 @@ class DockerManager(QWidget):
         ver_cl = QHBoxLayout(ver_card)
         ver_cl.setContentsMargins(0, 2, 0, 2)
         ver_cl.setSpacing(6)
-        ver_tl = QLabel("Docker版本")
+        ver_tl = QLabel(self._tr("Docker版本", "Docker Version"))
         ver_tl.setStyleSheet("font-size: 12px; color: #636e72;")
         ver_cl.addWidget(ver_tl)
         self.badge_version = QLabel("🐳 未知")
@@ -3195,7 +3217,7 @@ class DockerManager(QWidget):
         upt_cl = QHBoxLayout(upt_card)
         upt_cl.setContentsMargins(0, 2, 0, 2)
         upt_cl.setSpacing(6)
-        upt_tl = QLabel("运行概览")
+        upt_tl = QLabel(self._tr("运行概览", "Overview"))
         upt_tl.setStyleSheet("font-size: 12px; color: #636e72;")
         upt_cl.addWidget(upt_tl)
         for icon, badge_key, bg in [("▶", "uptime_run", "#27ae60"), ("⏸", "uptime_paused", "#f39c12"), ("⏹", "uptime_stopped", "#d63031")]:
@@ -3214,9 +3236,9 @@ class DockerManager(QWidget):
         svc_ly = QHBoxLayout(svc_frame)
         svc_ly.setContentsMargins(10, 4, 10, 4)
         svc_ly.setSpacing(4)
-        svc_ly.addWidget(QLabel("⚙ Docker服务:"))
+        svc_ly.addWidget(QLabel(self._tr("⚙ Docker服务:", "⚙ Docker Service:")))
         self.service_buttons = []
-        for text, bg, hover, action in [("▶ 启动","#27ae60","#1e914f","start"),("⏹ 停止","#d63031","#b3292a","stop"),("🔄 重启","#f39c12","#d4860e","restart")]:
+        for text, bg, hover, action in [(self._tr("▶ 启动", "▶ Start"),"#27ae60","#1e914f","start"),(self._tr("⏹ 停止", "⏹ Stop"),"#d63031","#b3292a","stop"),(self._tr("🔄 重启", "🔄 Restart"),"#f39c12","#d4860e","restart")]:
             btn = QPushButton(text)
             btn.setStyleSheet(f"{STYLE_BTN_CTRL} QPushButton {{ background: {bg}; }} QPushButton:hover {{ background: {hover}; }}")
             btn.clicked.connect(lambda checked, a=action: self._service_action(a))
@@ -3230,8 +3252,8 @@ class DockerManager(QWidget):
         boot_ly = QHBoxLayout(boot_frame)
         boot_ly.setContentsMargins(10, 4, 10, 4)
         boot_ly.setSpacing(4)
-        boot_ly.addWidget(QLabel("🔄 Docker服务开机自启:"))
-        for text, bg, hover, action in [("✓ 启用","#0984e3","#0873c4","enable"),("✕ 禁用","#6b7a7f","#556168","disable")]:
+        boot_ly.addWidget(QLabel(self._tr("🔄 Docker服务开机自启:", "🔄 Docker Auto-start:")))
+        for text, bg, hover, action in [(self._tr("✓ 启用", "✓ Enable"),"#0984e3","#0873c4","enable"),(self._tr("✕ 禁用", "✕ Disable"),"#6b7a7f","#556168","disable")]:
             btn = QPushButton(text)
             btn.setStyleSheet(f"{STYLE_BTN_CTRL} QPushButton {{ background: {bg}; }} QPushButton:hover {{ background: {hover}; }}")
             btn.clicked.connect(lambda checked, a=action: self._service_action(a))
@@ -3250,7 +3272,7 @@ class DockerManager(QWidget):
         left_panel = QVBoxLayout()
         left_panel.setSpacing(12)
 
-        self.cont_group = QGroupBox("容器列表")
+        self.cont_group = QGroupBox(self._tr("容器列表", "Containers"))
         self.cont_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold; font-size: 14px; border: 1px solid #e0e0e0;
@@ -3281,15 +3303,15 @@ class DockerManager(QWidget):
             }
             QPushButton:hover { background: #d63031; color: white; }
         """
-        self.cont_create_btn = QPushButton("+ 创建容器")
+        self.cont_create_btn = QPushButton(self._tr("+ 创建容器", "+ Create Container"))
         self.cont_create_btn.setFixedHeight(24)
         self.cont_create_btn.setStyleSheet(ADD_STYLE)
         self.cont_create_btn.clicked.connect(self._show_create_container_dialog)
-        self.cont_batch_btn = QPushButton("+ 批量导入")
+        self.cont_batch_btn = QPushButton(self._tr("+ 批量导入", "+ Batch Import"))
         self.cont_batch_btn.setFixedHeight(24)
         self.cont_batch_btn.setStyleSheet(ADD_STYLE)
         self.cont_batch_btn.clicked.connect(self._show_batch_import_dialog)
-        self.net_addnic_btn = QPushButton("+ 添加网卡")
+        self.net_addnic_btn = QPushButton(self._tr("+ 添加网卡", "+ Add NIC"))
         self.net_addnic_btn.setFixedHeight(24)
         self.net_addnic_btn.setStyleSheet(ADD_STYLE)
         self.net_addnic_btn.clicked.connect(self._show_add_nic_dialog)
@@ -3297,7 +3319,7 @@ class DockerManager(QWidget):
         self.cont_export_btn.setFixedHeight(24)
         self.cont_export_btn.setStyleSheet(ADD_STYLE)
         self.cont_export_btn.clicked.connect(self._show_export_dialog)
-        self.cont_del_btn = QPushButton("✕ 删除")
+        self.cont_del_btn = QPushButton(self._tr("✕ 删除", "✕ Delete"))
         self.cont_del_btn.setFixedHeight(24)
         self.cont_del_btn.setStyleSheet(DEL_STYLE)
         self.cont_del_btn.clicked.connect(self._delete_container)
@@ -3312,7 +3334,7 @@ class DockerManager(QWidget):
 
         self.cont_table = QTableWidget()
         self.cont_table.setColumnCount(5)
-        self.cont_table.setHorizontalHeaderLabels(["容器ID", "容器名称", "镜像ID", "状态", "创建时间"])
+        self.cont_table.setHorizontalHeaderLabels([self._tr("容器ID", "Container ID"), self._tr("容器名称", "Name"), self._tr("镜像ID", "Image ID"), self._tr("状态", "Status"), self._tr("创建时间", "Created")])
         self.cont_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.cont_table.setAlternatingRowColors(True)
         self.cont_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -3331,15 +3353,15 @@ class DockerManager(QWidget):
         right_panel = QVBoxLayout()
         right_panel.setSpacing(12)
 
-        self.net_group = QGroupBox("网络列表")
+        self.net_group = QGroupBox(self._tr("网络列表", "Networks"))
         self.net_group.setStyleSheet(self.cont_group.styleSheet())
         nl = QVBoxLayout(self.net_group)
         nl.setSpacing(4)
-        self.net_create_btn = QPushButton("+ 创建网络")
+        self.net_create_btn = QPushButton(self._tr("+ 创建网络", "+ Create Network"))
         self.net_create_btn.setFixedHeight(24)
         self.net_create_btn.setStyleSheet(ADD_STYLE)
         self.net_create_btn.clicked.connect(self._show_create_network_dialog)
-        self.net_del_btn = QPushButton("✕ 删除")
+        self.net_del_btn = QPushButton(self._tr("✕ 删除", "✕ Delete"))
         self.net_del_btn.setFixedHeight(24)
         self.net_del_btn.setStyleSheet(DEL_STYLE)
         self.net_del_btn.clicked.connect(self._delete_network)
@@ -3351,7 +3373,7 @@ class DockerManager(QWidget):
 
         self.net_table = QTableWidget()
         self.net_table.setColumnCount(3)
-        self.net_table.setHorizontalHeaderLabels(["名称", "驱动", "网段"])
+        self.net_table.setHorizontalHeaderLabels([self._tr("名称", "Name"), self._tr("驱动", "Driver"), self._tr("网段", "Subnet")])
         self.net_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.net_table.setAlternatingRowColors(True)
         self.net_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -3362,11 +3384,11 @@ class DockerManager(QWidget):
         nl.addWidget(self.net_table)
         right_panel.addWidget(self.net_group, 1)
 
-        self.img_group = QGroupBox("镜像列表")
+        self.img_group = QGroupBox(self._tr("镜像列表", "Images"))
         self.img_group.setStyleSheet(self.cont_group.styleSheet())
         il = QVBoxLayout(self.img_group)
         il.setSpacing(4)
-        self.img_del_btn = QPushButton("✕ 删除")
+        self.img_del_btn = QPushButton(self._tr("✕ 删除", "✕ Delete"))
         self.img_del_btn.setFixedHeight(24)
         self.img_del_btn.setStyleSheet(DEL_STYLE)
         self.img_del_btn.clicked.connect(self._delete_image)
@@ -3387,7 +3409,7 @@ class DockerManager(QWidget):
 
         self.img_table = QTableWidget()
         self.img_table.setColumnCount(5)
-        self.img_table.setHorizontalHeaderLabels(["仓库", "标签", "镜像ID", "大小", "创建时间"])
+        self.img_table.setHorizontalHeaderLabels([self._tr("仓库", "Repository"), self._tr("标签", "Tag"), self._tr("镜像ID", "Image ID"), self._tr("大小", "Size"), self._tr("创建时间", "Created")])
         self.img_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.img_table.setAlternatingRowColors(True)
         self.img_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -3596,6 +3618,7 @@ class DockerManager(QWidget):
             interfaces=self.docker_data.get("interfaces", []),
             existing_networks=self.docker_data.get("networks", []),
             existing_subnets={n.get("subnet", "") for n in self.docker_data.get("networks", []) if n.get("subnet")},
+            lang=self.lang,
         )
         if dlg.exec() == QDialog.Accepted:
             cmd = dlg.get_command()
@@ -3609,6 +3632,7 @@ class DockerManager(QWidget):
         dlg = CreateContainerDialog(self,
             images=self.docker_data.get("images", []),
             networks=self.docker_data.get("networks", []),
+            lang=self.lang,
         )
         if dlg.exec() == QDialog.Accepted:
             cmd = dlg.get_command()
@@ -3777,13 +3801,13 @@ class DockerManager(QWidget):
         self._execute_command(f"docker {action_name} {cid}", f"{action_name}_{cid[:12]}")
 
     def _start_container(self):
-        self._container_action("start", "▶ 启动")
+        self._container_action("start", self._tr("▶ 启动", "▶ Start"))
 
     def _restart_container(self):
-        self._container_action("restart", "🔄 重启")
+        self._container_action("restart", self._tr("🔄 重启", "🔄 Restart"))
 
     def _stop_container(self):
-        self._container_action("stop", "⏹ 停止")
+        self._container_action("stop", self._tr("⏹ 停止", "⏹ Stop"))
 
     def _delete_container(self):
         if not self.ssh_params:
@@ -3940,10 +3964,14 @@ class DockerManager(QWidget):
         self._load_progress_dlg.set_info(f"\U0001f4e5 \u52a0\u8f7d\u4e2d [{cur}/{total}]")
         self._load_progress_dlg.append_log(f"\u25b6 \u5f00\u59cb\u52a0\u8f7d [{cur}/{total}]: {f}")
         host, port, user, pwd = self.ssh_params
-        cmd = f"docker load -i {f}"
+        marker = f"===LOAD_{self._load_queue_idx}_RC:"
+        quoted_file = shlex.quote(f)
+        cmd = f"docker load -i {quoted_file}; rc=$?; echo '{marker}'$rc'==='; exit $rc"
         worker = DockerSSHWorker(host, port, user, pwd,
-                                 commands=[cmd, f"echo '===LOAD_{self._load_queue_idx}_DONE==='"],
+                                 commands=[cmd],
+                                 command_timeout=None,
                                  parent=self)
+        self._load_worker = worker
         worker.output_ready.connect(self._on_worker_output)
         if self._load_progress_dlg:
             worker.output_ready.connect(self._load_progress_dlg.append_log)
@@ -3957,12 +3985,24 @@ class DockerManager(QWidget):
         total = len(self._load_queue)
         idx = self._load_queue_idx + 1
         results = data.get("results", [])
-        success = any(f"===LOAD_{self._load_queue_idx}_DONE===" in r.get("stdout", "") for r in results)
+        marker = f"===LOAD_{self._load_queue_idx}_RC:"
+        rc_marker = None
+        for r in results:
+            out = r.get("stdout", "")
+            if marker in out:
+                try:
+                    rc_marker = int(out.rsplit(marker, 1)[1].split("===", 1)[0])
+                except (ValueError, IndexError):
+                    rc_marker = None
+                break
+        success = any(r.get("exit_status") == 0 for r in results) and rc_marker == 0
         if success:
             msg = f"\u2705 \u52a0\u8f7d\u5b8c\u6210 [{idx}/{total}]: {f}"
             self._log(msg)
         else:
-            err = results[0].get("stderr", "\u672a\u77e5\u9519\u8bef") if results else "\u672a\u77e5\u9519\u8bef"
+            err = "\u672a\u77e5\u9519\u8bef"
+            if results:
+                err = results[0].get("stderr") or results[0].get("stdout") or err
             msg = f"\u274c \u52a0\u8f7d\u5931\u8d25 [{idx}/{total}]: {err[:200]}"
             self._log(msg)
         if self._load_progress_dlg:

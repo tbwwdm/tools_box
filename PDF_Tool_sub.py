@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
-    QTabWidget,
     QTextEdit,
     QToolButton,
     QVBoxLayout,
@@ -1423,24 +1422,29 @@ class PdfDropLineEdit(QLineEdit):
 
 
 class PDFToolBox(QWidget):
-    def __init__(self):
+    def __init__(self, lang="zh"):
         super().__init__()
+        self.lang = lang
         self._thread = None
         self._worker = None
 
-        self.setWindowTitle("PDF 工具集")
-        self.resize(980, 720)
+        title = "PDF Tools" if self.lang == "en" else "PDF 工具集"
+        self.setWindowTitle(title)
+        self.resize(1280, 860)
         self.setStyleSheet("""
             PDFToolBox { background:#f5f6fa; }
-            QGroupBox { font-weight:bold; color:#2d3436; border:none; margin-top:14px; padding:14px 0 4px 0; }
+            QWidget#pdfToolPage { background:#f5f6fa; }
+            QWidget#pdfToolSection {
+                background:white;
+                border:1px solid #dfe6e9;
+                border-radius:8px;
+            }
+            QGroupBox { font-weight:bold; color:#2d3436; border:none; margin-top:10px; padding:12px 0 4px 0; }
             QGroupBox::title { padding:0 0 6px 0; border-bottom:2px solid #0984e3; }
             QLineEdit { border:1px solid #dfe6e9; border-radius:4px; padding:7px 8px; background:white; font-size:13px; }
             QLineEdit[dropInput="true"] { border:1px dashed #9bb7d4; background:#fbfdff; }
             QListWidget, QTextEdit { border:1px solid #dfe6e9; border-radius:4px; background:white; font-size:13px; }
             QListWidget { padding:6px; }
-            QTabWidget::pane { border:1px solid #dfe6e9; border-radius:4px; background:white; }
-            QTabBar::tab { padding:9px 22px; font-size:13px; border:none; }
-            QTabBar::tab:selected { border-bottom:2px solid #0984e3; color:#0984e3; font-weight:bold; }
             QSpinBox {
                 border:1px solid #dfe6e9;
                 border-radius:4px;
@@ -1480,12 +1484,22 @@ class PDFToolBox(QWidget):
         title.setStyleSheet("font-size:18px;font-weight:bold;color:#2d3436;")
         root.addWidget(title)
 
-        self.tabs = QTabWidget()
-        root.addWidget(self.tabs, 1)
+        self.tools_page = QWidget()
+        self.tools_page.setObjectName("pdfToolPage")
+        self.tools_layout = QHBoxLayout(self.tools_page)
+        self.tools_layout.setContentsMargins(0, 0, 0, 0)
+        self.tools_layout.setSpacing(14)
+        self.left_tools_layout = QVBoxLayout()
+        self.left_tools_layout.setSpacing(14)
+        self.right_tools_layout = QVBoxLayout()
+        self.right_tools_layout.setSpacing(14)
+        self.tools_layout.addLayout(self.left_tools_layout, 1)
+        self.tools_layout.addLayout(self.right_tools_layout, 1)
+        root.addWidget(self.tools_page, 1)
 
         self._build_merge_tab()
-        self._build_split_tab()
         self._build_nup_tab()
+        self._build_split_tab()
         self._build_edit_tab()
 
         log_group = QGroupBox("处理日志")
@@ -1517,6 +1531,10 @@ class PDFToolBox(QWidget):
             "QPushButton:hover{background:#f0f2f5;}"
         )
 
+    def _tr(self, zh: str, en: str) -> str:
+        """根据当前语言返回对应文本"""
+        return en if self.lang == "en" else zh
+
     def _path_row(self, label, line_edit, browse_func):
         row = QHBoxLayout()
         row.addWidget(QLabel(label))
@@ -1532,11 +1550,18 @@ class PDFToolBox(QWidget):
         spinbox.setFixedSize(92, 34)
         spinbox.setKeyboardTracking(False)
 
+    def _section_title(self, text):
+        title = QLabel(text)
+        title.setStyleSheet("font-size:16px;font-weight:bold;color:#1f2933;")
+        return title
+
     def _build_merge_tab(self):
         tab = QWidget()
+        tab.setObjectName("pdfToolSection")
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setContentsMargins(20, 16, 20, 18)
         layout.setSpacing(12)
+        layout.addWidget(self._section_title("PDF 合并"))
 
         file_group = QGroupBox("输入 PDF 文件")
         file_layout = QVBoxLayout(file_group)
@@ -1569,7 +1594,7 @@ class PDFToolBox(QWidget):
         self.merge_output = QLineEdit()
         layout.addLayout(self._path_row("输出文件", self.merge_output, self._choose_merge_output))
 
-        run = QPushButton("开始合并")
+        run = QPushButton("Start Merge" if self.lang == "en" else self._tr("开始合并", "Start Merge"))
         run.setStyleSheet(self._btn_style("#0984e3"))
         layout.addWidget(run, alignment=Qt.AlignRight)
 
@@ -1585,13 +1610,15 @@ class PDFToolBox(QWidget):
         self.merge_list_btn.clicked.connect(lambda: self._set_merge_browse_mode(False))
         self._set_merge_browse_mode(True)
         run.clicked.connect(self._run_merge)
-        self.tabs.addTab(tab, "PDF 合并")
+        self.left_tools_layout.addWidget(tab, 5)
 
     def _build_split_tab(self):
         tab = QWidget()
+        tab.setObjectName("pdfToolSection")
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setContentsMargins(20, 16, 20, 18)
         layout.setSpacing(12)
+        layout.addWidget(self._section_title("PDF 拆分"))
 
         self.split_input = PdfDropLineEdit()
         self.split_output_dir = QLineEdit()
@@ -1611,21 +1638,23 @@ class PDFToolBox(QWidget):
         opt.addWidget(QLabel("文件名前缀"))
         opt.addWidget(self.split_prefix, 1)
         layout.addLayout(opt)
-        layout.addStretch()
+        layout.addStretch(1)
 
-        run = QPushButton("开始拆分")
+        run = QPushButton("Start Split" if self.lang == "en" else self._tr("开始拆分", "Start Split"))
         run.setStyleSheet(self._btn_style("#27ae60"))
         layout.addWidget(run, alignment=Qt.AlignRight)
 
         self.split_input.file_dropped.connect(self._set_split_input)
         run.clicked.connect(self._run_split)
-        self.tabs.addTab(tab, "PDF 拆分")
+        self.left_tools_layout.addWidget(tab, 3)
 
     def _build_nup_tab(self):
         tab = QWidget()
+        tab.setObjectName("pdfToolSection")
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setContentsMargins(20, 16, 20, 18)
         layout.setSpacing(12)
+        layout.addWidget(self._section_title("A4 拼版"))
 
         self.nup_input = PdfDropLineEdit()
         self.nup_output = QLineEdit()
@@ -1659,9 +1688,9 @@ class PDFToolBox(QWidget):
         opt.addStretch()
         layout.addLayout(opt)
         layout.addWidget(self.nup_preview)
-        layout.addStretch()
+        layout.addStretch(1)
 
-        run = QPushButton("开始拼版")
+        run = QPushButton("Start Layout" if self.lang == "en" else self._tr("开始拼版", "Start Imposition"))
         run.setStyleSheet(self._btn_style("#0984e3"))
         layout.addWidget(run, alignment=Qt.AlignRight)
 
@@ -1670,13 +1699,15 @@ class PDFToolBox(QWidget):
         self.nup_input.file_dropped.connect(self._set_nup_input)
         self._refresh_nup_preview()
         run.clicked.connect(self._run_nup)
-        self.tabs.addTab(tab, "A4 拼版")
+        self.right_tools_layout.addWidget(tab, 4)
 
     def _build_edit_tab(self):
         tab = QWidget()
+        tab.setObjectName("pdfToolSection")
         layout = QVBoxLayout(tab)
-        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setContentsMargins(20, 16, 20, 18)
         layout.setSpacing(12)
+        layout.addWidget(self._section_title("编辑 PDF"))
 
         self.edit_input = PdfDropLineEdit()
         self.edit_output = QLineEdit()
@@ -1727,7 +1758,7 @@ class PDFToolBox(QWidget):
         down_btn.clicked.connect(lambda: self._move_edit_page(1))
         reset_btn.clicked.connect(self._reload_edit_input)
         run.clicked.connect(self._run_edit)
-        self.tabs.addTab(tab, "编辑PDF")
+        self.right_tools_layout.addWidget(tab, 5)
 
     def _append_log(self, msg):
         self.log_box.append(msg)

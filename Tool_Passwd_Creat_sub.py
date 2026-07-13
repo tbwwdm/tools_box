@@ -34,11 +34,13 @@ def save_log(data, prefix="密码"):
 
 
 class PasswdTool(QWidget):
-    def __init__(self):
+    def __init__(self, lang="zh"):
         super().__init__()
+        self.lang = lang
         self._init_logging()
 
-        self.setWindowTitle("密码生成器")
+        title = "Password Generator" if self.lang == "en" else self._tr("密码生成器", "Password Generator")
+        self.setWindowTitle(title)
         self.resize(820, 620)
         self.setStyleSheet("""
             PasswdTool { background:#f5f6fa; }
@@ -66,6 +68,11 @@ class PasswdTool(QWidget):
         self._build_single_tab()
         self._build_batch_tab()
         self._build_excel_tab()
+
+    def _tr(self, zh: str, en: str) -> str:
+        """根据当前语言返回对应文本"""
+        return en if self.lang == "en" else zh
+
 
     def _init_logging(self):
         log_dir = os.path.join(os.path.dirname(__file__), "logs")
@@ -99,16 +106,16 @@ class PasswdTool(QWidget):
         hl.addStretch()
         layout.addWidget(g)
 
-        btn = QPushButton("生成密码")
+        btn = QPushButton("Generate Password" if self.lang == "en" else self._tr("生成密码", "Generate Password"))
         btn.setStyleSheet(self._btn("#0984e3"))
         btn.clicked.connect(self._gen_single)
         layout.addWidget(btn)
 
         self.s_out = QTextEdit()
         self.s_out.setReadOnly(True)
-        self.s_out.setPlaceholderText("生成的密码将显示在这里")
+        self.s_out.setPlaceholderText("Generated passwords will be displayed here" if self.lang == "en" else "生成的密码将显示在这里")
         layout.addWidget(self.s_out)
-        self.tabs.addTab(tab, "单个生成")
+        self.tabs.addTab(tab, "Single Generate" if self.lang == "en" else "单个生成")
 
     def _build_batch_tab(self):
         tab = QWidget()
@@ -133,16 +140,16 @@ class PasswdTool(QWidget):
         vl.addWidget(self.b_ips)
         layout.addWidget(g2)
 
-        btn = QPushButton("生成密码")
+        btn = QPushButton("Generate Password" if self.lang == "en" else self._tr("生成密码", "Generate Password"))
         btn.setStyleSheet(self._btn("#0984e3"))
         btn.clicked.connect(self._gen_batch)
         layout.addWidget(btn)
 
         self.b_out = QTextEdit()
         self.b_out.setReadOnly(True)
-        self.b_out.setPlaceholderText("生成的密码将显示在这里")
+        self.b_out.setPlaceholderText("Generated passwords will be displayed here" if self.lang == "en" else "生成的密码将显示在这里")
         layout.addWidget(self.b_out)
-        self.tabs.addTab(tab, "批量生成")
+        self.tabs.addTab(tab, "Batch Generate" if self.lang == "en" else "批量生成")
 
     def _build_excel_tab(self):
         tab = QWidget()
@@ -162,25 +169,29 @@ class PasswdTool(QWidget):
         g2 = QGroupBox("Excel 文件")
         hl2 = QHBoxLayout(g2)
         self.e_path = QLineEdit()
-        self.e_path.setPlaceholderText("选择包含 IP 列的 Excel 文件")
+        placeholder = "Select Excel file with IP column" if self.lang == "en" else "选择包含 IP 列的 Excel 文件"
+        self.e_path.setPlaceholderText(placeholder)
         hl2.addWidget(self.e_path)
-        btn = QPushButton("浏览")
+        btn = QPushButton("Browse" if self.lang == "en" else "浏览")
         btn.setStyleSheet(self._btn("#636e72"))
+        dialog_title = "Select Excel" if self.lang == "en" else "选择Excel"
         btn.clicked.connect(lambda: self.e_path.setText(
-            QFileDialog.getOpenFileName(self, "选择Excel", "", "Excel (*.xlsx)")[0]))
+            QFileDialog.getOpenFileName(self, dialog_title, "", "Excel (*.xlsx)")[0]))
         hl2.addWidget(btn)
         layout.addWidget(g2)
 
-        btn2 = QPushButton("处理 Excel")
+        btn2 = QPushButton("Process Excel" if self.lang == "en" else "处理 Excel")
         btn2.setStyleSheet(self._btn("#27ae60"))
         btn2.clicked.connect(self._gen_excel)
         layout.addWidget(btn2)
 
         self.e_out = QTextEdit()
         self.e_out.setReadOnly(True)
-        self.e_out.setPlaceholderText("处理结果将显示在这里")
+        placeholder2 = "Processing results will be displayed here" if self.lang == "en" else "处理结果将显示在这里"
+        self.e_out.setPlaceholderText(placeholder2)
         layout.addWidget(self.e_out)
-        self.tabs.addTab(tab, "Excel处理")
+        tab_name = "Process Excel" if self.lang == "en" else "Excel处理"
+        self.tabs.addTab(tab, tab_name)
 
     def _gen_single(self):
         try:

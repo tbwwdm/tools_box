@@ -18,6 +18,8 @@ import tempfile
 from pathlib import Path
 from typing import List, Tuple, Optional
 
+import ssh_utils
+
 try:
     import paramiko
     HAS_PARAMIKO = True
@@ -38,12 +40,97 @@ from PySide6.QtWidgets import (
     QSizePolicy, QStatusBar, QTreeWidget, QTreeWidgetItem,
     QAbstractItemView, QHeaderView, QLineEdit, QGridLayout,
     QButtonGroup, QDialog, QRadioButton, QScrollArea, QStyle, QStyleOptionButton,
-    QStyleOptionHeader,
+    QStyleOptionHeader, QTabWidget, QSpinBox, QTableWidget, QTableWidgetItem,
 )
 from PySide6.QtCore import Qt, QThread, QObject, Signal, QMutex, QMutexLocker, QTimer
 from PySide6.QtGui import QFont, QColor
 
+# ============================================================
+# 系统初始化任务定义
+# ============================================================
+TASK_META = {
+    "firewall": "🛡防火墙",
+    "selinux":  "🛡SELinux",
+    "sshd_dns": "🚀SSHD",
+    "rc_local": "⚙rc.local",
+    "ntp_off":   "⏱旧NTP",
+    "chrony":    "⏱Chrony",
+    "ftp":       "📦FTP",
+    "telnet":    "📦Telnet",
+    "python2":   "🐍Python2",
+    "gdb":       "🔧GDB",
+}
 
+# 需要 YUM 的任务代码集合
+YUM_TASKS_SET = {"chrony", "ftp", "telnet", "python2", "gdb"}
+
+# SSH 工作线程
+class SSHWorker(QThread):
+    log = Signal(str)
+    task_status = Signal(int, int, str)
+    worker_done = Signal(int, bool)
+    
+    def __init__(self, host, port, user, pwd, tasks):
+        super().__init__()
+        self.host = host
+        self.port = port
+        self.user = user
+        self.pwd = pwd
+        self.tasks = tasks
+        self._stopped = False
+        
+    def stop(self):
+        self._stopped = True
+        
+    def run(self):
+        import paramiko
+        client = None
+        all_ok = True
+        try:
+            self.log.emit(f"🔌 [{self.host}] 正在连接 SSH...")
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(self.host, port=self.port, username=self.user,
+                           password=self.pwd, timeout=15)
+            self.log.emit(f"✅ [{self.host}] SSH 连接成功")
+            
+            # 执行任务
+            for cmd, desc in self.tasks:
+                if self._stopped:
+                    self.log.emit(f"⏹ [{self.host}] 已停止")
+                    all_ok = False
+                    break
+                    
+                self.log.emit(f"▶ [{self.host}] {desc}")
+                self.log.emit(f"  $ {cmd}")
+                
+                stdin, stdout, stderr = client.exec_command(cmd, timeout=300)
+                out_text = stdout.read().decode()
+                for line in out_text.splitlines():
+                    if line.strip():
+                        self.log.emit(f"  {line.strip()}")
+                        
+                rc = stdout.channel.recv_exit_status()
+                if rc == 0:
+                    self.log.emit(f"  ✅ {desc} - 成功")
+                else:
+                    self.log.emit(f"  ❌ {desc} - 失败 (退出码 {rc})")
+                    all_ok = False
+                    
+            client.close()
+            self.log.emit(f"✅ [{self.host}] 全部任务执行完毕")
+            
+        except Exception as e:
+            self.log.emit(f"❌ [{self.host}] 连接失败: {str(e)}")
+            all_ok = False
+        finally:
+            if client:
+                client.close()
+            self.worker_done.emit(0, all_ok)
+
+
+# ============================================================
+#  YUM 工具
 # ============================================================
 #  配置常量
 # ============================================================
@@ -538,12 +625,13 @@ class CheckboxHeader(QHeaderView):
 class ClientDetectThread(QThread):
     result = Signal(str, str, str, bool, str, str, bool)  # ip, os_type, version, yum_ok, yum_url, url_type, connected
 
-    def __init__(self, ip: str, port: int, user: str, pwd: str, parent=None):
+    def __init__(self, ip: str, port: int, user: str, pwd: str, deep_check: bool = False, parent=None):
         super().__init__(parent)
         self.ip = ip
         self.port = port
         self.user = user
         self.pwd = pwd
+        self.deep_check = deep_check  # 是否执行完整 yum 验证
 
     def run(self):
         ssh = paramiko.SSHClient()
@@ -559,11 +647,23 @@ class ClientDetectThread(QThread):
                         password=self.pwd, timeout=15)
             connected = True
 
-            _, stdout, _ = ssh.exec_command("cat /etc/os-release", timeout=10)
+            # ---- 并行获取 OS 信息 + repo 数量 + baseurl ----
+            _, stdout, _ = ssh.exec_command(
+                "cat /etc/os-release 2>/dev/null; echo '---SPLIT---'; "
+                "ls /etc/yum.repos.d/*.repo 2>/dev/null | wc -l; echo '---SPLIT---'; "
+                "grep -h '^baseurl=' /etc/yum.repos.d/*.repo 2>/dev/null | head -1",
+                timeout=10
+            )
             out = stdout.read().decode('utf-8', errors='replace')
+            parts = out.split('---SPLIT---')
+            os_text = parts[0].strip() if len(parts) > 0 else ""
+            repo_count_str = parts[1].strip() if len(parts) > 1 else "0"
+            baseurl_raw = parts[2].strip() if len(parts) > 2 else ""
+
+            # 解析 OS 类型和版本
             pretty = ""
             ver_id = ""
-            for line in out.split('\n'):
+            for line in os_text.split('\n'):
                 line = line.strip()
                 if line.startswith('PRETTY_NAME='):
                     pretty = line.split('=', 1)[1].strip('"\'')
@@ -587,39 +687,10 @@ class ClientDetectThread(QThread):
             nums = re.findall(r'(\d[\d.]*)', ver_id)
             version = nums[0] if nums else ver_id
 
-            # 1) 检查 .repo 文件是否存在
-            _, stdout_r, _ = ssh.exec_command(
-                "ls /etc/yum.repos.d/*.repo 2>/dev/null | wc -l", timeout=10
-            )
-            repo_count = int(stdout_r.read().decode('utf-8', errors='replace').strip() or 0)
-
-            # 2) 完整检测 yum 是否可用：清缓存 → 下载元数据 → 验证包可获取
-            _, stdout2, _ = ssh.exec_command(
-                "yum clean all 2>/dev/null; yum makecache 2>&1; yum install -y --downloadonly chrony 2>&1; echo __RC__$?",
-                timeout=180
-            )
-            out2 = stdout2.read().decode('utf-8', errors='replace')
-            # 解析最后一行 __RC__N
-            exit_code = -1
-            for line in reversed(out2.strip().split('\n')):
-                m = re.match(r'__RC__(\d+)', line.strip())
-                if m:
-                    exit_code = int(m.group(1))
-                    break
-
-            yum_ok = False
-            if repo_count > 0 and exit_code == 0:
-                yum_ok = True
-
-            # 检测当前 yum 源地址
-            _, stdout3, _ = ssh.exec_command(
-                "grep -h '^baseurl=' /etc/yum.repos.d/*.repo 2>/dev/null | head -1",
-                timeout=10
-            )
-            raw = stdout3.read().decode('utf-8', errors='replace').strip()
-            if raw:
-                # 提取 baseurl= 之后的地址
-                url = raw.split('=', 1)[1].strip() if '=' in raw else raw
+            # 解析 baseurl
+            repo_count = int(repo_count_str or 0)
+            if baseurl_raw:
+                url = baseurl_raw.split('=', 1)[1].strip() if '=' in baseurl_raw else baseurl_raw
                 yum_url = url
                 if url.startswith('http://') or url.startswith('https://'):
                     url_type = "🌐 远程"
@@ -628,6 +699,36 @@ class ClientDetectThread(QThread):
             else:
                 yum_url = "无 .repo"
                 url_type = "未知"
+
+            # ---- yum 可用性检测 ----
+            if repo_count > 0:
+                if self.deep_check:
+                    # 深度检测：完整 yum 验证 (clean + makecache + download)
+                    _, stdout2, _ = ssh.exec_command(
+                        "yum clean all 2>/dev/null; yum makecache 2>&1; "
+                        "yum install -y --downloadonly chrony 2>&1; echo __RC__$?",
+                        timeout=180
+                    )
+                    out2 = stdout2.read().decode('utf-8', errors='replace')
+                    exit_code = -1
+                    for line in reversed(out2.strip().split('\n')):
+                        m = re.match(r'__RC__(\d+)', line.strip())
+                        if m:
+                            exit_code = int(m.group(1))
+                            break
+                    yum_ok = (exit_code == 0)
+                else:
+                    # 快速检测：仅检查 yum repolist 是否能正常列出仓库
+                    _, stdout2, _ = ssh.exec_command(
+                        "yum repolist 2>&1 | grep -c '^[a-zA-Z]' || echo 0",
+                        timeout=30
+                    )
+                    repolist_out = stdout2.read().decode('utf-8', errors='replace').strip()
+                    try:
+                        enabled_repos = int(repolist_out)
+                        yum_ok = enabled_repos > 0
+                    except ValueError:
+                        yum_ok = False
 
         except Exception:
             connected = False
@@ -736,11 +837,173 @@ class ClientDeployPool(QObject):
 
 
 # ============================================================
+#  批量SSH工作线程（NTP配置/还原/状态检查、系统初始化共用）
+# ============================================================
+class BatchSSHWorker(QThread):
+    """后台批量SSH操作线程，避免主界面冻结"""
+    log = Signal(str)               # 日志消息
+    progress = Signal(int, int)     # 当前索引, 总数
+    finished_signal = Signal(str)   # 完成汇总信息
+    result = Signal(int, object)    # 服务器索引, 状态结果(dict)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._cancelled = False
+        self._mutex = QMutex()
+        self.servers: list = []
+        self.handler = None       # callable(client, server, log_fn) -> None
+        self.connect_timeout = 5  # SSH连接超时（秒），快速失败
+
+    def cancel(self):
+        with QMutexLocker(self._mutex):
+            self._cancelled = True
+
+    def _is_cancelled(self) -> bool:
+        with QMutexLocker(self._mutex):
+            return self._cancelled
+
+    def run(self):
+        total = len(self.servers)
+        success = 0
+        fail = 0
+        for i, server in enumerate(self.servers):
+            if self._is_cancelled():
+                self.log.emit("⚠️ 用户已取消操作")
+                break
+
+            host = server.get('host', '')
+            port = server.get('port', 22)
+            username = server.get('username', 'root')
+            password = server.get('password', '')
+
+            self.progress.emit(i, total)
+            self.log.emit(f"\n[{i+1}/{total}] 正在处理 {host}...")
+
+            # SSH连接（短超时，快速失败）
+            try:
+                client = ssh_utils.create_ssh_client(
+                    host, port, username, password, timeout=self.connect_timeout
+                )
+            except Exception as e:
+                self.log.emit(f"❌ {host} 连接失败（超时{self.connect_timeout}s）: {str(e)}")
+                self.result.emit(i, {'status': 'error', 'host': host, 'error': str(e)})
+                fail += 1
+                continue
+
+            try:
+                ret = self.handler(client, server, lambda msg: self.log.emit(msg))
+                # 如果 handler 返回了结构化结果，发出 result 信号
+                if ret is not None:
+                    self.result.emit(i, ret)
+                success += 1
+            except Exception as e:
+                self.log.emit(f"❌ {host} 操作失败: {str(e)}")
+                self.result.emit(i, {'status': 'error', 'host': host, 'error': str(e)})
+                fail += 1
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+        self.progress.emit(total, total)
+        self.finished_signal.emit(f"完成: 成功 {success}, 失败 {fail}")
+
+
+# ============================================================
+#  NTP 服务器列表行控件
+# ============================================================
+class NTPServerRowWidget(QWidget):
+    """NTP服务器列表的单行控件：左侧显示连接信息，右侧居中显示状态"""
+
+    def __init__(self, index, host, port, username, lang="zh", parent=None):
+        super().__init__(parent)
+        self.lang = lang
+        self._index = index
+        self._full_status_text = ""
+        self.setMinimumHeight(32)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(16)
+
+        # 左侧：序号 + 连接信息（固定宽度）
+        self.info_label = QLabel(f"{index}.  {username}@{host}:{port}")
+        self.info_label.setStyleSheet(
+            "font-size: 12px; font-weight: bold; color: #2d3436;"
+        )
+        self.info_label.setMinimumWidth(200)
+        self.info_label.setMaximumWidth(260)
+        layout.addWidget(self.info_label, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        # 右侧：状态（拉伸填充，居中显示）
+        self.status_label = QLabel("⏳ " + ("待检测" if lang != "en" else "Pending"))
+        self.status_label.setAlignment(
+            Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.status_label.setStyleSheet("font-size: 12px; color: #b2bec3;")
+        self.status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.status_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self.status_label, 1, Qt.AlignmentFlag.AlignVCenter)
+
+    def resizeEvent(self, event):
+        """窗口大小变化时重新计算省略文本"""
+        super().resizeEvent(event)
+        if self._full_status_text:
+            self._refresh_elided_text()
+
+    def _refresh_elided_text(self):
+        """按当前可用宽度省略显示状态文本"""
+        fm = self.status_label.fontMetrics()
+        avail = max(100, self.status_label.width())
+        elided = fm.elidedText(
+            self._full_status_text,
+            Qt.TextElideMode.ElideRight,
+            avail
+        )
+        self.status_label.setText(elided)
+        self.status_label.setToolTip(self._full_status_text)
+
+    def set_pending(self):
+        """设置为检测中状态"""
+        text = "⏳ " + ("检测中..." if self.lang != "en" else "Checking...")
+        self._full_status_text = text
+        self._refresh_elided_text()
+        self.status_label.setStyleSheet("font-size: 12px; color: #0984e3;")
+
+    def set_status(self, data: dict):
+        """根据状态数据更新显示"""
+        status = data.get('status', 'unknown')
+        if status == 'ok':
+            text = (f"✅ 服务:{data.get('service','')}  同步:{data.get('sync','')}  "
+                    f"NTP源:{data.get('ntp_source','')}  时区:{data.get('timezone','')}  "
+                    f"时间:{data.get('time','')}")
+            color = "#00b894"
+        elif status == 'warning':
+            text = (f"⚠️ 服务:{data.get('service','')}  同步:{data.get('sync','')}  "
+                    f"NTP源:{data.get('ntp_source','')}  时区:{data.get('timezone','')}  "
+                    f"时间:{data.get('time','')}")
+            color = "#e17055"
+        elif status == 'error':
+            err = data.get('error', '未知错误')
+            if len(err) > 60:
+                err = err[:60] + "..."
+            text = f"❌ " + ("连接失败" if self.lang != "en" else "Connection failed") + f": {err}"
+            color = "#d63031"
+        else:
+            text = "⏳ " + ("待检测" if self.lang != "en" else "Pending")
+            color = "#b2bec3"
+        self._full_status_text = text
+        self._refresh_elided_text()
+        self.status_label.setStyleSheet(f"font-size: 12px; color: {color};")
+
+
+# ============================================================
 #  主窗口
 # ============================================================
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, lang="zh"):
         super().__init__()
+        self.lang = lang
         self.detector = SystemDetector()
         self.ssh_manager = SSHManager()
         self.distro_info = self.detector.detect_distro()
@@ -753,6 +1016,7 @@ class MainWindow(QMainWindow):
         self._client_passwords: dict[str, str] = {}  # ip -> password
         self._selected_repo_content: str = ""
         self._selected_repo_name: str = ""
+        self._init_yum_check_worker = None  # 系统初始化页面YUM检测线程
 
         self._init_ui()
         self._connect_signals()
@@ -760,11 +1024,16 @@ class MainWindow(QMainWindow):
         self._refresh_server_info()
         self._refresh_yum_status()
 
+    def _tr(self, zh: str, en: str) -> str:
+        """根据当前语言返回对应文本"""
+        return en if self.lang == "en" else zh
+
     # ----------------------------------------------------------
     #  UI 构建 — 纯 Fusion 风格，无全局 stylesheet
     # ----------------------------------------------------------
     def _init_ui(self):
-        self.setWindowTitle("Linux YUM 源管理器")
+        title = "Linux YUM Repository Manager" if self.lang == "en" else "Linux YUM 源管理器"
+        self.setWindowTitle(title)
         self.setMinimumSize(1000, 720)
         self.resize(1200, 850)
         self.setStyleSheet("QMainWindow { background: #f5f6fa; }")
@@ -778,41 +1047,60 @@ class MainWindow(QMainWindow):
         # SSH 连接栏 (Docker 工具风格)
         self._build_connection_bar(main_layout)
         self._build_separator(main_layout)
-
-        # 导航标签
-        nav = QFrame()
-        nav.setStyleSheet("QFrame { background: white; border-bottom: 1px solid #e0e0e0; }")
-        nav_row = QHBoxLayout(nav)
-        nav_row.setContentsMargins(12, 4, 12, 4)
-        nav_row.setSpacing(1)
-
-        self.nav_group = QButtonGroup(self)
-        self.nav_group.setExclusive(True)
-        n1 = self._tab_btn("📦  服务器配置", 0)
-        n2 = self._tab_btn("📋  客户端配置", 1)
-        nav_row.addWidget(n1)
-        nav_row.addWidget(n2)
-        nav_row.addStretch()
-
-        self.lbl_update = QLabel("")
-        self.lbl_update.setStyleSheet("color: #b2bec3; font-size: 11px;")
-        nav_row.addWidget(self.lbl_update)
-        main_layout.addWidget(nav)
-
-        # 内容区域
-        self.stack = QStackedWidget()
+        
+        # 使用QTabWidget替代导航按钮
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setTabPosition(QTabWidget.TabPosition.North)
+        self.tab_widget.setMovable(False)
+        self.tab_widget.setStyleSheet("""
+            QTabWidget::pane {
+                border: none;
+                background: white;
+            }
+            QTabBar::tab {
+                min-width: 140px;
+                padding: 12px 24px;
+                font-size: 13px;
+                font-weight: 500;
+                border: none;
+                border-radius: 4px;
+                margin: 4px 2px;
+                background: #f0f3f5;
+                color: #636e72;
+            }
+            QTabBar::tab:selected {
+                background: #0984e3;
+                color: white;
+                font-weight: bold;
+            }
+            QTabBar::tab:hover:!selected {
+                background: #e4e8ec;
+            }
+            QTabBar::tab:first {
+                margin-left: 8px;
+            }
+        """)
+        
+        # 创建4个标签页
+        # 标签页1: YUM服务器配置 (保持原界面)
         self.page_server = self._build_server_page()
+        self.tab_widget.addTab(self.page_server, self._tr("📦 YUM服务器配置", "📦 YUM Server"))
+        
+        # 标签页2: YUM客户端配置 (保持原界面)
         self.page_client = self._build_client_page()
-        self.stack.addWidget(self.page_server)
-        self.stack.addWidget(self.page_client)
-
-        content = QWidget()
-        cl = QVBoxLayout(content)
-        cl.setContentsMargins(0, 0, 0, 0)
-        cl.addWidget(self.stack)
-        main_layout.addWidget(content, 1)
-
-        # 底部日志 (Docker 工具风格)
+        self.tab_widget.addTab(self.page_client, self._tr("💻 YUM客户端配置", "💻 YUM Client"))
+        
+        # 标签页3: NTP时间同步 (待实现)
+        self.page_ntp = self._build_ntp_page()
+        self.tab_widget.addTab(self.page_ntp, self._tr("⏱ NTP时间同步", "⏱ NTP Sync"))
+        
+        # 标签页4: 系统初始化 (待实现)
+        self.page_init = self._build_init_page()
+        self.tab_widget.addTab(self.page_init, self._tr("⚙️ 系统初始化", "⚙️ System Init"))
+        
+        main_layout.addWidget(self.tab_widget, 1)
+        
+        # 底部日志 (共享日志框，保持原样式)
         self.log_box = QTextEdit()
         self.log_box.setReadOnly(True)
         self.log_box.setFixedHeight(150)
@@ -824,7 +1112,7 @@ class MainWindow(QMainWindow):
             }
         """)
         main_layout.addWidget(self.log_box)
-
+        
         # SSH 断开时禁用服务器配置页
         self.page_server.setEnabled(False)
 
@@ -838,10 +1126,10 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 8, 16, 8)
         layout.setSpacing(8)
 
-        layout.addWidget(QLabel("🔗"))
-
+        layout.addWidget(QLabel(self._tr("🔗", "🔗")))
+        
         # 主机
-        layout.addWidget(QLabel("主机:"))
+        layout.addWidget(QLabel(self._tr("主机:", "Host:")))
         self.ssh_host = QLineEdit()
         self.ssh_host.setPlaceholderText("192.168.1.100")
         self.ssh_host.setFixedHeight(34)
@@ -854,7 +1142,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.ssh_host)
 
         # 端口
-        layout.addWidget(QLabel("端口:"))
+        layout.addWidget(QLabel(self._tr("端口:", "Port:")))
         self.ssh_port = QLineEdit("22")
         self.ssh_port.setFixedWidth(70)
         self.ssh_port.setFixedHeight(34)
@@ -880,7 +1168,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.ssh_pass)
 
         # 连接按钮
-        self.btn_ssh_toggle = QPushButton("连接")
+        self.btn_ssh_toggle = QPushButton("Connect" if self.lang == "en" else "连接")
         self.btn_ssh_toggle.setFixedHeight(34)
         self.btn_ssh_toggle.setStyleSheet("""
             QPushButton {
@@ -894,7 +1182,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.btn_ssh_toggle)
 
         # 刷新 ISO 按钮
-        self.btn_ssh_refresh = QPushButton("刷新")
+        self.btn_ssh_refresh = QPushButton("Refresh" if self.lang == "en" else "刷新")
         self.btn_ssh_refresh.setFixedHeight(34)
         self.btn_ssh_refresh.setStyleSheet("""
             QPushButton {
@@ -909,7 +1197,7 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
-        self.ssh_status_label = QLabel("● 未连接")
+        self.ssh_status_label = QLabel(self._tr("● 未连接", "● Disconnected"))
         self.ssh_status_label.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 13px;")
         layout.addWidget(self.ssh_status_label)
 
@@ -960,9 +1248,9 @@ class MainWindow(QMainWindow):
     def _on_ssh_connected(self):
         self._set_ssh_ui_busy(False)
         host_str = f"{self.ssh_manager.user}@{self.ssh_manager.host}"
-        self.ssh_status_label.setText(f"● 已连接 {host_str}")
+        self.ssh_status_label.setText(self._tr(f"● 已连接 {host_str}", f"● Connected {host_str}"))
         self.ssh_status_label.setStyleSheet("color: #27ae60; font-weight: bold; font-size: 13px;")
-        self.btn_ssh_toggle.setText("断开")
+        self.btn_ssh_toggle.setText(self._tr("断开", "Disconnect"))
         self.btn_ssh_toggle.setStyleSheet("""
             QPushButton {
                 background: #d63031; color: white; border: none;
@@ -993,9 +1281,9 @@ class MainWindow(QMainWindow):
         self.web_iso_list.setEnabled(False)
         self.btn_add_exec.setEnabled(False)
         self.add_iso_list.setEnabled(False)
-        self.ssh_status_label.setText("● 未连接")
+        self.ssh_status_label.setText(self._tr("● 未连接", "● Disconnected"))
         self.ssh_status_label.setStyleSheet("color: #e74c3c; font-weight: bold; font-size: 13px;")
-        self.btn_ssh_toggle.setText("连接")
+        self.btn_ssh_toggle.setText(self._tr("连接", "Connect"))
         self.btn_ssh_toggle.setStyleSheet("""
             QPushButton {
                 background: #0984e3; color: white; border: none;
@@ -1091,7 +1379,7 @@ class MainWindow(QMainWindow):
         title_frame.setFixedHeight(40)
         tl = QHBoxLayout(title_frame)
         tl.setContentsMargins(0, 0, 0, 0)
-        title_lbl = QLabel("操作选择")
+        title_lbl = QLabel(self._tr("操作选择", "Operation"))
         title_lbl.setAlignment(Qt.AlignCenter)
         title_lbl.setStyleSheet("font-size: 13px; color: #2d3436;")
         tl.addWidget(title_lbl)
@@ -1129,9 +1417,9 @@ class MainWindow(QMainWindow):
             bfl.addWidget(btn)
             return btn
 
-        self.btn_srv_local = _srv_btn("创建本地yum源", "📦", 0)
-        self.btn_srv_web = _srv_btn("创建webyum源", "🌐", 1)
-        self.btn_srv_web_add = _srv_btn("新增webyum源", "➕", 2)
+        self.btn_srv_local = _srv_btn(self._tr("创建本地yum源", "Create Local yum Source"), "📦", 0)
+        self.btn_srv_web = _srv_btn(self._tr("创建webyum源", "Create Web yum Source"), "🌐", 1)
+        self.btn_srv_web_add = _srv_btn(self._tr("新增webyum源", "Add Web yum Source"), "➕", 2)
         bfl.addStretch()
         ll.addWidget(btn_frame, 1)
 
@@ -1216,7 +1504,7 @@ class MainWindow(QMainWindow):
 
         desc_row = QHBoxLayout()
         desc_row.setSpacing(6)
-        desc_row.addWidget(QLabel("镜像解压后存放路径",
+        desc_row.addWidget(QLabel(self._tr("镜像解压后存放路径", "ISO Extract Path"),
             styleSheet="font-size: 12px; color: #636e72;"))
         desc_row.addStretch()
         self.lbl_mount_space = QLabel()
@@ -1244,8 +1532,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._check_mount_path)
 
         # 镜像位置
-        layout.addSpacing(6)
-        layout.addWidget(QLabel("镜像位置（ISO 文件所在目录）",
+        layout.addWidget(QLabel(self._tr("镜像位置（ISO 文件所在目录）", "ISO File Directory"),
             styleSheet="font-size: 12px; color: #636e72;"))
         ip_row = QHBoxLayout()
         ip_row.setSpacing(6)
@@ -1254,7 +1541,7 @@ class MainWindow(QMainWindow):
         self.local_iso_dir.setFixedWidth(_INPUT_W)
         self.local_iso_dir.setStyleSheet(_INPUT_STYLE)
         ip_row.addWidget(self.local_iso_dir)
-        self.btn_local_refresh = QPushButton("刷新")
+        self.btn_local_refresh = QPushButton(self._tr("刷新", "Refresh"))
         self.btn_local_refresh.setFixedHeight(34)
         self.btn_local_refresh.setStyleSheet("""
             QPushButton { background: white; color: #6b7a7f; border: 1px solid #c8d0d8;
@@ -1268,7 +1555,10 @@ class MainWindow(QMainWindow):
 
         # ISO 列表
         self.local_iso_list = QTreeWidget()
-        self.local_iso_list.setHeaderLabels(["", "文件名", "大小", "匹配状态"])
+        self.local_iso_list.setHeaderLabels(["", 
+            self._tr("文件名", "File Name"),
+            self._tr("大小", "Size"),
+            self._tr("匹配状态", "Match Status")])
         self.local_iso_list.setColumnWidth(0, 36)
         self.local_iso_list.setColumnWidth(1, 300)
         self.local_iso_list.setColumnWidth(2, 70)
@@ -1305,7 +1595,7 @@ class MainWindow(QMainWindow):
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        self.btn_local_exec = QPushButton("▶  创建本地 yum 源")
+        self.btn_local_exec = QPushButton(self._tr("▶  创建本地 yum 源", "▶  Create Local yum Source"))
         self.btn_local_exec.setStyleSheet("""
             QPushButton { background: #0984e3; color: white; border: none;
                           border-radius: 4px; padding: 8px 28px; font-size: 13px; font-weight: bold; }
@@ -1314,7 +1604,7 @@ class MainWindow(QMainWindow):
         """)
         btn_row.addWidget(self.btn_local_exec)
         btn_row.addSpacing(8)
-        self.btn_local_cancel = QPushButton("取消")
+        self.btn_local_cancel = QPushButton(self._tr("取消", "Cancel"))
         self.btn_local_cancel.setStyleSheet("""
             QPushButton { background: white; color: #6b7a7f; border: 1px solid #c8d0d8;
                           border-radius: 4px; padding: 8px 28px; font-size: 13px; }
@@ -1376,13 +1666,13 @@ class MainWindow(QMainWindow):
 
         # 标题行
         title_row = QHBoxLayout()
-        title_row.addWidget(QLabel("🔍 环境预检查",
+        title_row.addWidget(QLabel(self._tr("🔍 环境预检查", "🔍 Env Check"),
             styleSheet="font-size: 13px; font-weight: bold; color: #2d3436;"))
         title_row.addStretch()
 
         # web 表单才有关闭按钮
         if not suffix:
-            self.btn_env_disable_all = QPushButton("一键关闭防火墙和SELinux")
+            self.btn_env_disable_all = QPushButton(self._tr("一键关闭防火墙和SELinux", "Disable Firewall & SELinux"))
             self.btn_env_disable_all.setFixedHeight(30)
             self.btn_env_disable_all.setStyleSheet("""
                 QPushButton { background: #d63031; color: white; border: none;
@@ -1393,7 +1683,7 @@ class MainWindow(QMainWindow):
             self.btn_env_disable_all.clicked.connect(self._disable_all)
             title_row.addWidget(self.btn_env_disable_all)
 
-        btn_refresh = QPushButton("🔄 刷新检查")
+        btn_refresh = QPushButton(self._tr("🔄 刷新检查", "🔄 Refresh Check"))
         btn_refresh.setFixedHeight(30)
         btn_refresh.setStyleSheet("""
             QPushButton { background: #0984e3; color: white; border: none;
@@ -1404,14 +1694,14 @@ class MainWindow(QMainWindow):
         title_row.addWidget(btn_refresh)
         cl.addLayout(title_row)
 
-        port_lbl = QLabel("⏳ 端口 80: 检测中...")
-        httpd_lbl = QLabel("⏳ httpd: 检测中...")
+        port_lbl = QLabel(self._tr("⏳ 端口 80: 检测中...", "⏳ Port 80: Checking..."))
+        httpd_lbl = QLabel(self._tr("⏳ httpd: 检测中...", "⏳ httpd: Checking..."))
         SS = "font-size: 12px; color: #636e72; padding: 3px 0;"
 
         # web 表单（双列布局，无行内关闭按钮）
         if not suffix:
-            fw_lbl = QLabel("⏳ 防火墙: 检测中...")
-            se_lbl = QLabel("⏳ SELinux: 检测中...")
+            fw_lbl = QLabel(self._tr("⏳ 防火墙: 检测中...", "⏳ Firewall: Checking..."))
+            se_lbl = QLabel(self._tr("⏳ SELinux: 检测中...", "⏳ SELinux: Checking..."))
 
             cols = QHBoxLayout()
             cols.setSpacing(30)
@@ -1435,8 +1725,8 @@ class MainWindow(QMainWindow):
 
         # add 表单（双列布局，无关闭按钮）
         else:
-            fw_lbl = QLabel("⏳ 防火墙: 检测中...")
-            se_lbl = QLabel("⏳ SELinux: 检测中...")
+            fw_lbl = QLabel(self._tr("⏳ 防火墙: 检测中...", "⏳ Firewall: Checking..."))
+            se_lbl = QLabel(self._tr("⏳ SELinux: 检测中...", "⏳ SELinux: Checking..."))
 
             cols = QHBoxLayout()
             cols.setSpacing(30)
@@ -1479,9 +1769,10 @@ class MainWindow(QMainWindow):
             SS = "font-size: 12px; padding: 3px 0;"
 
             if not self.ssh_manager.connected:
-                port_lbl.setText("❌ SSH 未连接"); httpd_lbl.setText("❌ SSH 未连接")
-                if fw_lbl: fw_lbl.setText("❌ SSH 未连接")
-                if se_lbl: se_lbl.setText("❌ SSH 未连接")
+                msg = self._tr("❌ SSH 未连接", "❌ SSH Disconnected")
+                port_lbl.setText(msg); httpd_lbl.setText(msg)
+                if fw_lbl: fw_lbl.setText(msg)
+                if se_lbl: se_lbl.setText(msg)
                 continue
 
             # 端口 80
@@ -1491,10 +1782,10 @@ class MainWindow(QMainWindow):
             )
             occupied = 'occupied' in out
             if is_add:
-                port_lbl.setText("  ✅ 端口 80: 运行中" if occupied else "  ❌ 端口 80: 未启用")
+                port_lbl.setText(self._tr("  ✅ 端口 80: 运行中", "  ✅ Port 80: Running") if occupied else self._tr("  ❌ 端口 80: 未启用", "  ❌ Port 80: Not Enabled"))
                 port_lbl.setStyleSheet(SS + ("color: #27ae60;" if occupied else "color: #d63031;"))
             else:
-                port_lbl.setText("  ✅ 端口 80: 未占用" if not occupied else "  ❌ 端口 80: 已被占用")
+                port_lbl.setText(self._tr("  ✅ 端口 80: 未占用", "  ✅ Port 80: Free") if not occupied else self._tr("  ❌ 端口 80: 已被占用", "  ❌ Port 80: Occupied"))
                 port_lbl.setStyleSheet(SS + ("color: #27ae60;" if not occupied else "color: #d63031;"))
                 self._env_port_ok = not occupied
 
@@ -1524,22 +1815,14 @@ class MainWindow(QMainWindow):
 
             # 防火墙状态
             if fw_lbl:
-                ok, out = self.ssh_manager.exec_command("systemctl is-active firewalld 2>/dev/null")
-                active = ok and 'active' in out
-                fw_good = not active if is_add else True
-                fw_lbl.setText(
-                    f"  {'✅' if fw_good else '🔴'} 防火墙: {'运行中' if active else '已关闭'}"
-                )
+                fw_text = self._tr("  防火墙: 运行中", "  🔴 Firewall: Active") if active else self._tr("  ✅ 防火墙: 已关闭", "  ✅ Firewall: Disabled")
+                fw_lbl.setText(fw_text)
                 fw_lbl.setStyleSheet(SS + ("color: #27ae60;" if fw_good else "color: #d63031;"))
 
             # SELinux 状态
             if se_lbl:
-                ok, out = self.ssh_manager.exec_command("getenforce 2>/dev/null")
-                enforcing = ok and 'Enforcing' in out
-                se_good = not enforcing if is_add else True
-                se_lbl.setText(
-                    f"  {'✅' if se_good else '🔴'} SELinux: {'开启' if enforcing else '已关闭'}"
-                )
+                se_text = self._tr("  🔴 SELinux: 开启", "  🔴 SELinux: Enforcing") if enforcing else self._tr("  ✅ SELinux: 已关闭", "  ✅ SELinux: Disabled")
+                se_lbl.setText(se_text)
                 se_lbl.setStyleSheet(SS + ("color: #27ae60;" if se_good else "color: #d63031;"))
 
             # 创建模式：防火墙和 SELinux 均已关闭 → 禁用一键关闭按钮
@@ -1624,7 +1907,7 @@ class MainWindow(QMainWindow):
 
         left = QHBoxLayout()
         left.setSpacing(6)
-        left.addWidget(QLabel("HTTP 地址:",
+        left.addWidget(QLabel(self._tr("HTTP 地址:", "HTTP Address:"),
             styleSheet="font-size: 12px; color: #636e72;"))
         self.cb_ip = QComboBox()
         self.cb_ip.setEditable(True)
@@ -1639,13 +1922,13 @@ class MainWindow(QMainWindow):
 
         right = QHBoxLayout()
         right.setSpacing(6)
-        right.addWidget(QLabel("镜像位置:",
+        right.addWidget(QLabel(self._tr("镜像位置:", "ISO Directory:"),
             styleSheet="font-size: 12px; color: #636e72;"))
         self.web_iso_dir = QLineEdit(self._current_iso_dir)
         self.web_iso_dir.setFixedHeight(_INPUT_H)
         self.web_iso_dir.setStyleSheet(_INPUT_STYLE)
         right.addWidget(self.web_iso_dir, 1)
-        self.btn_web_refresh = QPushButton("刷新")
+        self.btn_web_refresh = QPushButton(self._tr("刷新", "Refresh"))
         self.btn_web_refresh.setFixedHeight(34)
         self.btn_web_refresh.setStyleSheet("""
             QPushButton { background: white; color: #6b7a7f; border: 1px solid #c8d0d8;
@@ -1659,7 +1942,9 @@ class MainWindow(QMainWindow):
 
         # ISO 列表（多选，无版本匹配）
         self.web_iso_list = QTreeWidget()
-        self.web_iso_list.setHeaderLabels(["", "文件名", "大小"])
+        self.web_iso_list.setHeaderLabels(["", 
+            self._tr("文件名", "File Name"),
+            self._tr("大小", "Size")])
         self.web_iso_list.setColumnWidth(0, 36)
         self.web_iso_list.setColumnWidth(1, 300)
         self.web_iso_list.setColumnWidth(2, 70)
@@ -1699,7 +1984,7 @@ class MainWindow(QMainWindow):
         # 按钮
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        self.btn_web_exec = QPushButton("▶  开始部署")
+        self.btn_web_exec = QPushButton(self._tr("▶  开始部署", "▶  Start Deploy"))
         self.btn_web_exec.setStyleSheet("""
             QPushButton { background: #0984e3; color: white; border: none;
                           border-radius: 4px; padding: 8px 28px; font-size: 13px; font-weight: bold; }
@@ -1708,7 +1993,7 @@ class MainWindow(QMainWindow):
         """)
         btn_row.addWidget(self.btn_web_exec)
         btn_row.addSpacing(8)
-        self.btn_web_dl_local = QPushButton("⬇ 下载 .repo文件")
+        self.btn_web_dl_local = QPushButton(self._tr("⬇ 下载 .repo文件", "⬇ Download .repo"))
         self.btn_web_dl_local.setStyleSheet("""
             QPushButton { background: white; color: #6b7a7f; border: 1px solid #c8d0d8;
                           border-radius: 4px; padding: 8px 18px; font-size: 12px; }
@@ -1747,13 +2032,13 @@ class MainWindow(QMainWindow):
         self._refresh_ip_list()
         dir_row = QHBoxLayout()
         dir_row.setSpacing(6)
-        dir_row.addWidget(QLabel("镜像位置:",
+        dir_row.addWidget(QLabel(self._tr("镜像位置:", "ISO Directory:"),
             styleSheet="font-size: 12px; color: #636e72;"))
         self.add_iso_dir = QLineEdit(self._current_iso_dir)
         self.add_iso_dir.setFixedHeight(_INPUT_H)
         self.add_iso_dir.setStyleSheet(_INPUT_STYLE)
         dir_row.addWidget(self.add_iso_dir, 1)
-        self.btn_add_refresh = QPushButton("刷新")
+        self.btn_add_refresh = QPushButton(self._tr("刷新", "Refresh"))
         self.btn_add_refresh.setFixedHeight(34)
         self.btn_add_refresh.setStyleSheet("""
             QPushButton { background: white; color: #6b7a7f; border: 1px solid #c8d0d8;
@@ -1766,7 +2051,9 @@ class MainWindow(QMainWindow):
 
         # ISO 列表（多选，无版本匹配）
         self.add_iso_list = QTreeWidget()
-        self.add_iso_list.setHeaderLabels(["", "文件名", "大小"])
+        self.add_iso_list.setHeaderLabels(["", 
+            self._tr("文件名", "File Name"),
+            self._tr("大小", "Size")])
         self.add_iso_list.setColumnWidth(0, 36)
         self.add_iso_list.setColumnWidth(1, 300)
         self.add_iso_list.setColumnWidth(2, 70)
@@ -1806,7 +2093,7 @@ class MainWindow(QMainWindow):
         # 按钮
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        self.btn_add_exec = QPushButton("▶  新增 Web yum 源")
+        self.btn_add_exec = QPushButton(self._tr("▶  新增 Web yum 源", "▶  Add Web yum Source"))
         self.btn_add_exec.setStyleSheet("""
             QPushButton { background: #0984e3; color: white; border: none;
                           border-radius: 4px; padding: 8px 28px; font-size: 13px; font-weight: bold; }
@@ -1815,7 +2102,7 @@ class MainWindow(QMainWindow):
         """)
         btn_row.addWidget(self.btn_add_exec)
         btn_row.addSpacing(8)
-        self.btn_add_dl_local = QPushButton("⬇ 下载 .repo")
+        self.btn_add_dl_local = QPushButton(self._tr("⬇ 下载 .repo", "⬇ Download .repo"))
         self.btn_add_dl_local.setStyleSheet("""
             QPushButton { background: white; color: #6b7a7f; border: 1px solid #c8d0d8;
                           border-radius: 4px; padding: 8px 18px; font-size: 12px; }
@@ -1953,15 +2240,15 @@ class MainWindow(QMainWindow):
         rl.setContentsMargins(14, 10, 14, 10)
         rl.setSpacing(8)
 
-        title = QLabel("📦 选择要分发的 .repo 文件")
+        title = QLabel(self._tr("📦 选择要分发的 .repo 文件", "📦 Select .repo File to Deploy"))
         title.setStyleSheet("font-size: 13px; font-weight: bold; color: #2d3436; background: transparent;")
         rl.addWidget(title)
 
         # 来源切换
         src_row = QHBoxLayout()
         src_row.setSpacing(20)
-        self.repo_source_server = QRadioButton("从服务器选择")
-        self.repo_source_upload = QRadioButton("本地上传")
+        self.repo_source_server = QRadioButton(self._tr("从服务器选择", "From Server"))
+        self.repo_source_upload = QRadioButton(self._tr("本地上传", "Local Upload"))
         self.repo_source_server.setChecked(True)
         for rb in (self.repo_source_server, self.repo_source_upload):
             rb.setStyleSheet("QRadioButton { font-size: 12px; color: #2d3436; }")
@@ -1998,7 +2285,7 @@ class MainWindow(QMainWindow):
         upload_col.setContentsMargins(0, 2, 0, 2)
         upload_col.setSpacing(2)
         # 按钮左对齐
-        self.repo_upload_btn = QPushButton("📁 选择 .repo 文件")
+        self.repo_upload_btn = QPushButton(self._tr("📁 选择 .repo 文件", "📁 Select .repo File"))
         self.repo_upload_btn.setStyleSheet("""
             QPushButton { background: white; color: #6b7a7f; border: 1px solid #c8d0d8;
                           border-radius: 4px; padding: 6px 14px; font-size: 12px; }
@@ -2006,7 +2293,7 @@ class MainWindow(QMainWindow):
         """)
         upload_col.addWidget(self.repo_upload_btn, alignment=Qt.AlignLeft)
         # 拖拽提示 + 文件信息
-        self.repo_upload_label = QLabel("支持拖拽 .repo 文件到此处")
+        self.repo_upload_label = QLabel(self._tr("支持拖拽 .repo 文件到此处", "Drag & drop .repo file here"))
         self.repo_upload_label.setStyleSheet("font-size: 12px; color: #b2bec3; background: transparent;")
         upload_col.addWidget(self.repo_upload_label, alignment=Qt.AlignLeft)
         upload_col.addStretch()
@@ -2014,7 +2301,8 @@ class MainWindow(QMainWindow):
 
         rl.addWidget(self.repo_content_stack)
 
-        repo_hint = QLabel("提示：服务器 repo 单选，本地上传重复上传以最后一次为准")
+        repo_hint = QLabel(self._tr("提示：服务器 repo 单选，本地上传重复上传以最后一次为准",
+                                   "Hint: Single selection for server repo; last upload wins for local"))
         repo_hint.setStyleSheet("font-size: 11px; color: #b2bec3; background: transparent;")
         rl.addWidget(repo_hint)
 
@@ -2024,11 +2312,11 @@ class MainWindow(QMainWindow):
         action_bar = QHBoxLayout()
         action_bar.setSpacing(8)
 
-        self.btn_client_import = QPushButton("📥 导入 Excel")
-        self.btn_client_add = QPushButton("+ 手动添加")
-        self.btn_client_delete = QPushButton("🗑 删除选中")
+        self.btn_client_import = QPushButton(self._tr("📥 导入 Excel", "📥 Import Excel"))
+        self.btn_client_add = QPushButton(self._tr("+ 手动添加", "+ Manual Add"))
+        self.btn_client_delete = QPushButton(self._tr("🗑 删除选中", "🗑 Delete Selected"))
         self.cb_client_system_filter = QComboBox()
-        self.cb_client_system_filter.addItem("按系统勾选 ▼", "")
+        self.cb_client_system_filter.addItem(self._tr("按系统勾选 ▼", "Filter by System ▼"), "")
         self.cb_client_system_filter.setMinimumWidth(160)
 
         for btn in (self.btn_client_import, self.btn_client_add, self.btn_client_delete):
@@ -2050,7 +2338,15 @@ class MainWindow(QMainWindow):
         self.client_table = QTreeWidget()
         self.client_table.setColumnCount(9)
         self.client_table.setHeaderLabels([
-            "", "IP 地址", "端口", "用户名", "系统类型", "版本", "yum 状态", "YUM 路径", "连接状态"
+            "", 
+            self._tr("IP 地址", "IP Address"),
+            self._tr("端口", "Port"),
+            self._tr("用户名", "Username"),
+            self._tr("系统类型", "OS Type"),
+            self._tr("版本", "Version"),
+            self._tr("yum 状态", "YUM Status"),
+            self._tr("YUM 路径", "YUM Path"),
+            self._tr("连接状态", "Connection")
         ])
         self.client_table.setRootIsDecorated(False)
         self.client_table.setSelectionMode(QAbstractItemView.NoSelection)
@@ -2082,14 +2378,14 @@ class MainWindow(QMainWindow):
         # ── 4. 底部按钮 ──
         bottom_row = QHBoxLayout()
         bottom_row.addStretch()
-        self.btn_client_detect = QPushButton("🔄 检测选中客户端")
+        self.btn_client_detect = QPushButton(self._tr("🔄 检测选中客户端", "🔄 Detect Selected"))
         self.btn_client_detect.setStyleSheet("""
             QPushButton { background: #0984e3; color: white; border: none;
                           border-radius: 4px; padding: 8px 24px; font-size: 13px; font-weight: bold; }
             QPushButton:hover { background: #0873c4; }
             QPushButton:disabled { background: #b2bec3; color: #dfe6e9; }
         """)
-        self.btn_client_deploy = QPushButton("🚀 部署到选中客户端")
+        self.btn_client_deploy = QPushButton(self._tr("🚀 部署到选中客户端", "🚀 Deploy to Selected"))
         self.btn_client_deploy.setStyleSheet("""
             QPushButton { background: #27ae60; color: white; border: none;
                           border-radius: 4px; padding: 8px 24px; font-size: 13px; font-weight: bold; }
@@ -2101,6 +2397,17 @@ class MainWindow(QMainWindow):
         bottom_row.addWidget(self.btn_client_detect)
         bottom_row.addSpacing(12)
         bottom_row.addWidget(self.btn_client_deploy)
+        bottom_row.addSpacing(12)
+        self.chk_client_deep_check = QCheckBox(self._tr("深度检测（完整验证yum可用性，较慢）",
+                                                              "Deep Check (full yum validation, slower)"))
+        self.chk_client_deep_check.setStyleSheet("""
+            QCheckBox { font-size: 11px; color: #636e72; }
+        """)
+        self.chk_client_deep_check.setToolTip(
+            self._tr("勾选后将执行 yum clean all + makecache + install --downloadonly 完整验证\n不勾选则仅执行 yum repolist 快速检测（推荐）",
+                       "Deep check executes: yum clean all + makecache + install --downloadonly\nQuick check uses: yum repolist (recommended)")
+        )
+        bottom_row.addWidget(self.chk_client_deep_check)
         bottom_row.addStretch()
         layout.addLayout(bottom_row)
 
@@ -2110,7 +2417,6 @@ class MainWindow(QMainWindow):
     #  信号连接
     # ----------------------------------------------------------
     def _connect_signals(self):
-        self.nav_group.idClicked.connect(self._switch_tab)
         self.local_iso_list.itemChanged.connect(self._on_local_iso_toggled)
         self.btn_local_exec.clicked.connect(self._on_exec_local)
         self.btn_local_cancel.clicked.connect(self._on_cancel)
@@ -2279,7 +2585,8 @@ class MainWindow(QMainWindow):
                 self.client_table.topLevelItem(row_idx).setCheckState(0, Qt.Checked)
                 detect_targets.append((row_idx, host, port, user, pwd))
                 added += 1
-            self._log(f"📥 已导入 {added} 个客户端{'，跳过 ' + str(skipped) + ' 个重复 IP' if skipped else ''}，开始自动检测...")
+            mode = "深度检测" if self.chk_client_deep_check.isChecked() else "快速检测"
+            self._log(f"📥 已导入 {added} 个客户端{'，跳过 ' + str(skipped) + ' 个重复 IP' if skipped else ''}，开始自动{mode}...")
             self._update_client_action_buttons()
             self._refresh_system_filter()
             self._start_detection(detect_targets)
@@ -2444,10 +2751,12 @@ class MainWindow(QMainWindow):
             return
         self._start_detection(targets)
 
-    def _start_detection(self, targets: list):
+    def _start_detection(self, targets: list, deep_check: bool = None):
         """启动检测，targets 为 [(row_idx, ip, port, user, pwd), ...]"""
         if not targets:
             return
+        if deep_check is None:
+            deep_check = self.chk_client_deep_check.isChecked()
         for ri, ip, port, user, pwd in targets:
             item = self.client_table.topLevelItem(ri)
             if item:
@@ -2457,12 +2766,12 @@ class MainWindow(QMainWindow):
         self._detect_active = 0
         self._detect_max = 5
         self._detect_threads = []
-        self._launch_detect()
+        self._launch_detect(deep_check)
 
-    def _launch_detect(self):
+    def _launch_detect(self, deep_check: bool = False):
         while self._detect_active < self._detect_max and self._detect_queue:
             row_idx, ip, port, user, pwd = self._detect_queue.pop(0)
-            t = ClientDetectThread(ip, port, user, pwd)
+            t = ClientDetectThread(ip, port, user, pwd, deep_check=deep_check)
             t.result.connect(lambda ip2, ot, ver, yum_ok, url, url_t, conn: self._on_detect_done(ip2, ot, ver, yum_ok, url, url_t, conn))
             self._detect_threads.append(t)
             self._detect_active += 1
@@ -2486,9 +2795,10 @@ class MainWindow(QMainWindow):
             self._log(f"❌ {ip} → 连接失败")
 
         if self._detect_queue or self._detect_active > 0:
-            self._launch_detect()
+            self._launch_detect(self.chk_client_deep_check.isChecked())
         else:
-            self._log("✅ 客户端检测完成")
+            mode = "深度检测" if self.chk_client_deep_check.isChecked() else "快速检测"
+            self._log(f"✅ 客户端{mode}完成")
             self._refresh_system_filter()
             self._update_client_action_buttons()
             self.btn_client_detect.setEnabled(True)
@@ -3091,6 +3401,1318 @@ class MainWindow(QMainWindow):
                     paths.append(path)
         return paths
 
+    # ----------------------------------------------------------
+    #  标签页3: NTP时间同步
+    # ----------------------------------------------------------
+    def _build_ntp_page(self) -> QWidget:
+        """构建NTP时间同步标签页（优化布局）"""
+        self.ntp_servers = []  # 存储服务器列表
+        self.ntp_row_widgets = []  # 存储行控件引用
+        self.ntp_worker = None  # SSH工作线程
+        
+        page = QWidget()
+        page.setObjectName("ntp_page")
+        main_layout = QVBoxLayout(page)
+        main_layout.setContentsMargins(16, 16, 16, 16)
+        main_layout.setSpacing(12)
+        
+        # ========== 1. 顶部标题栏 ==========
+        title_bar = QHBoxLayout()
+        title_icon = QLabel("⏱")
+        title_icon.setStyleSheet("font-size: 24px;")
+        title_bar.addWidget(title_icon)
+        
+        title_label = QLabel(self._tr("NTP 时间同步", "NTP Time Sync"))
+        title_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #2d3436;")
+        title_bar.addWidget(title_label)
+        title_bar.addStretch()
+        
+        # 帮助按钮
+        help_btn = QPushButton("?")
+        help_btn.setFixedSize(24, 24)
+        help_btn.setStyleSheet("""
+            QPushButton { background: #dfe6e9; color: #636e72; border-radius: 12px; 
+                         font-weight: bold; font-size: 12px; }
+            QPushButton:hover { background: #b2bec3; }
+        """)
+        help_btn.setToolTip(self._tr("NTP配置说明", "NTP Config Help"))
+        title_bar.addWidget(help_btn)
+        main_layout.addLayout(title_bar)
+        
+        # 分隔线
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet("background: #dfe6e9; max-height: 1px;")
+        main_layout.addWidget(line)
+        
+        # ========== 2. NTP配置参数卡片 ==========
+        ntp_card = QGroupBox(self._tr(" NTP 配置参数 ", " NTP Config Parameters "))
+        ntp_card.setStyleSheet("""
+            QGroupBox { font-size: 13px; font-weight: bold; color: #00b894;
+                        border: 1px solid #dfe6e9; border-radius: 6px; margin-top: 8px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; }
+        """)
+        ntp_layout = QGridLayout(ntp_card)
+        ntp_layout.setHorizontalSpacing(8)
+        ntp_layout.setVerticalSpacing(10)
+        ntp_layout.setContentsMargins(12, 16, 12, 12)
+
+        # 列宽策略：第0/2列(标签)按内容自适应；第1/3列(输入框)按比例拉伸
+        ntp_layout.setColumnStretch(0, 0)
+        ntp_layout.setColumnStretch(1, 1)
+        ntp_layout.setColumnStretch(2, 0)
+        ntp_layout.setColumnStretch(3, 2)
+
+        # NTP服务器
+        ntp_label_style = "font-size: 12px; color: #2d3436;"
+        lbl_ntp_server = QLabel(self._tr("NTP服务器:", "NTP Server:"))
+        lbl_ntp_server.setStyleSheet(ntp_label_style)
+        lbl_ntp_server.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        ntp_layout.addWidget(lbl_ntp_server, 0, 0)
+        self.ntp_server_edit = QLineEdit("ntp.aliyun.com")
+        self.ntp_server_edit.setStyleSheet("""
+            QLineEdit { border: 1px solid #dfe6e9; border-radius: 4px;
+                        padding: 6px 8px; font-size: 12px; background: white; }
+            QLineEdit:focus { border: 1px solid #00b894; }
+        """)
+        ntp_layout.addWidget(self.ntp_server_edit, 0, 1, 1, 3)
+
+        # MinPoll & MaxPoll
+        lbl_min = QLabel(self._tr("MinPoll:", "MinPoll:"))
+        lbl_min.setStyleSheet(ntp_label_style)
+        lbl_min.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        ntp_layout.addWidget(lbl_min, 1, 0)
+        self.ntp_minpoll = QSpinBox()
+        self.ntp_minpoll.setRange(3, 17)
+        self.ntp_minpoll.setValue(6)
+        self.ntp_minpoll.setStyleSheet("""
+            QSpinBox { border: 1px solid #dfe6e9; border-radius: 4px;
+                       padding: 4px; font-size: 12px; background: white; }
+            QSpinBox:focus { border: 1px solid #00b894; }
+        """)
+        ntp_layout.addWidget(self.ntp_minpoll, 1, 1)
+
+        lbl_max = QLabel(self._tr("MaxPoll:", "MaxPoll:"))
+        lbl_max.setStyleSheet(ntp_label_style)
+        lbl_max.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        ntp_layout.addWidget(lbl_max, 1, 2)
+        self.ntp_maxpoll = QSpinBox()
+        self.ntp_maxpoll.setRange(3, 17)
+        self.ntp_maxpoll.setValue(10)
+        self.ntp_maxpoll.setStyleSheet(self.ntp_minpoll.styleSheet())
+        ntp_layout.addWidget(self.ntp_maxpoll, 1, 3)
+
+        # Step模式 & 时区
+        self.ntp_step = QCheckBox(self._tr("启用Step模式", "Enable Step Mode"))
+        self.ntp_step.setStyleSheet("font-size: 12px; color: #2d3436;")
+        ntp_layout.addWidget(self.ntp_step, 2, 0, 1, 2)
+
+        lbl_tz = QLabel(self._tr("时区:", "Timezone:"))
+        lbl_tz.setStyleSheet(ntp_label_style)
+        lbl_tz.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        ntp_layout.addWidget(lbl_tz, 2, 2)
+        self.ntp_timezone = QComboBox()
+        self.ntp_timezone.addItems([
+            "Asia/Shanghai", "Asia/Hong_Kong", "Asia/Taipei",
+            "America/New_York", "America/Los_Angeles", "Europe/London",
+            "UTC"
+        ])
+        self.ntp_timezone.setCurrentText("Asia/Shanghai")
+        self.ntp_timezone.setStyleSheet("""
+            QComboBox { border: 1px solid #dfe6e9; border-radius: 4px;
+                        padding: 4px 8px; font-size: 12px; background: white; }
+            QComboBox:focus { border: 1px solid #00b894; }
+        """)
+        ntp_layout.addWidget(self.ntp_timezone, 2, 3)
+
+        main_layout.addWidget(ntp_card)
+        
+        # ========== 3. 服务器配置卡片 ==========
+        server_card = QGroupBox(self._tr(" 服务器配置 ", " Server Config "))
+        server_card.setStyleSheet("""
+            QGroupBox { font-size: 13px; font-weight: bold; color: #0984e3; 
+                        border: 1px solid #dfe6e9; border-radius: 6px; margin-top: 8px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; }
+        """)
+        server_layout = QVBoxLayout(server_card)
+        server_layout.setSpacing(8)
+        
+        # 文件选择行
+        file_row = QHBoxLayout()
+        file_icon = QLabel("📂")
+        file_row.addWidget(file_icon)
+
+        
+        file_label = QLabel(self._tr("Excel文件:", "Excel File:"))
+        file_label.setStyleSheet("font-size: 12px; color: #636e72;")
+        file_row.addWidget(file_label)
+        
+        self.ntp_file_edit = QLineEdit()
+        self.ntp_file_edit.setPlaceholderText(self._tr("请选择包含服务器信息的Excel文件 (.xlsx)", "Select Excel file with server info (.xlsx)"))
+        self.ntp_file_edit.setReadOnly(True)
+        self.ntp_file_edit.setStyleSheet("""
+            QLineEdit { border: 1px solid #dfe6e9; border-radius: 4px; 
+                        padding: 6px 8px; font-size: 12px; background: white; }
+        """)
+        file_row.addWidget(self.ntp_file_edit, 1)
+        
+        btn_select = QPushButton(self._tr(" 选择文件 ", " Select File "))
+        btn_select.setStyleSheet("""
+            QPushButton { background: #0984e3; color: white; padding: 6px 16px; 
+                         border: none; border-radius: 4px; font-size: 12px; font-weight: bold; }
+            QPushButton:hover { background: #0873c4; }
+        """)
+        btn_select.clicked.connect(self._ntp_select_file)
+        file_row.addWidget(btn_select)
+        
+        btn_clear = QPushButton(self._tr(" 清空 ", " Clear "))
+        btn_clear.setStyleSheet("""
+            QPushButton { background: #dfe6e9; color: #636e72; padding: 6px 16px; 
+                         border: none; border-radius: 4px; font-size: 12px; }
+            QPushButton:hover { background: #d0d3d6; }
+        """)
+        btn_clear.clicked.connect(self._ntp_clear_servers)
+        file_row.addWidget(btn_clear)
+        server_layout.addLayout(file_row)
+        
+        # 服务器列表（增加高度）
+        self.ntp_server_list = QListWidget()
+        self.ntp_server_list.setMinimumHeight(200)  # 增加最小高度
+        self.ntp_server_list.setStyleSheet("""
+            QListWidget { border: 1px solid #dfe6e9; border-radius: 4px; 
+                         background: white; font-size: 12px; alternate-background-color: #f8f9fa; }
+            QListWidget::item { padding: 4px 8px; border-bottom: 1px solid #f0f3f5; }
+            QListWidget::item:selected { background: #0984e3; color: white; }
+            QListWidget::item:hover { background: #e8f4fd; }
+        """)
+        server_layout.addWidget(self.ntp_server_list, 1)
+        
+        main_layout.addWidget(server_card, 1)
+        
+        # ========== 4. 操作按钮 ==========
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
+        
+        self.ntp_configure_btn = QPushButton(self._tr(" ⚙️ 执行配置 ", " ⚙️ Configure "))
+        self.ntp_configure_btn.setStyleSheet("""
+            QPushButton { background: #00b894; color: white; padding: 8px 24px; 
+                         border: none; border-radius: 4px; font-size: 13px; font-weight: bold; }
+            QPushButton:hover { background: #00a381; }
+            QPushButton:disabled { background: #b2bec3; }
+        """)
+        self.ntp_configure_btn.clicked.connect(self._ntp_configure)
+        btn_layout.addWidget(self.ntp_configure_btn)
+        
+        self.ntp_restore_btn = QPushButton(self._tr(" 🔄 还原配置 ", " 🔄 Restore "))
+        self.ntp_restore_btn.setStyleSheet("""
+            QPushButton { background: #fdcb6e; color: #2d3436; padding: 8px 24px; 
+                         border: none; border-radius: 4px; font-size: 13px; font-weight: bold; }
+            QPushButton:hover { background: #f9c855; }
+            QPushButton:disabled { background: #b2bec3; }
+        """)
+        self.ntp_restore_btn.clicked.connect(self._ntp_restore)
+        btn_layout.addWidget(self.ntp_restore_btn)
+        
+        self.ntp_status_btn = QPushButton(self._tr(" 📊 获取状态 ", " 📊 Check Status "))
+        self.ntp_status_btn.setStyleSheet("""
+            QPushButton { background: #6c5ce7; color: white; padding: 8px 24px; 
+                         border: none; border-radius: 4px; font-size: 13px; font-weight: bold; }
+            QPushButton:hover { background: #5b4cdb; }
+            QPushButton:disabled { background: #b2bec3; }
+        """)
+        self.ntp_status_btn.clicked.connect(self._ntp_check_status)
+        btn_layout.addWidget(self.ntp_status_btn)
+        
+        btn_layout.addStretch()
+        main_layout.addLayout(btn_layout)
+        
+        # ========== 5. 进度条 ==========
+        self.ntp_progress = QProgressBar()
+        self.ntp_progress.setVisible(False)
+        self.ntp_progress.setStyleSheet("""
+            QProgressBar { border: none; border-radius: 4px; background: #f0f3f5; 
+                           height: 6px; }
+            QProgressBar::chunk { background: #00b894; border-radius: 4px; }
+        """)
+        main_layout.addWidget(self.ntp_progress)
+        
+        main_layout.addStretch()
+        return page
+        
+        # 时区
+        ntp_layout.addWidget(QLabel(self._tr("时区:", "Timezone:")), 3, 0)
+        self.ntp_timezone = QComboBox()
+        self.ntp_timezone.setEditable(True)
+        self.ntp_timezone.addItems([
+            "Asia/Shanghai", "Asia/Hong_Kong", "Asia/Taipei",
+            "America/New_York", "Europe/London", "UTC"
+        ])
+        self.ntp_timezone.setStyleSheet("""
+            QComboBox {
+                border: 1px solid #dfe6e9;
+                border-radius: 4px;
+                padding: 6px 8px;
+                font-size: 13px;
+            }
+        """)
+        ntp_layout.addWidget(self.ntp_timezone, 3, 1, 1, 2)
+        
+        layout.addWidget(ntp_group)
+        
+        # 操作按钮
+        btn_layout = QHBoxLayout()
+        
+        self.ntp_configure_btn = QPushButton(self._tr("执行配置", "Configure"))
+        self.ntp_configure_btn.setStyleSheet("""
+            QPushButton {
+                background: #27ae60;
+                color: white;
+                font-weight: bold;
+                padding: 8px 24px;
+                border: none;
+                border-radius: 4px;
+                font-size: 13px;
+            }
+            QPushButton:hover { background: #219a52; }
+        """)
+        self.ntp_configure_btn.clicked.connect(self._ntp_configure)
+        btn_layout.addWidget(self.ntp_configure_btn)
+        
+        self.ntp_restore_btn = QPushButton(self._tr("还原配置", "Restore"))
+        self.ntp_restore_btn.setStyleSheet("""
+            QPushButton {
+                background: #e67e22;
+                color: white;
+                font-weight: bold;
+                padding: 8px 24px;
+                border: none;
+                border-radius: 4px;
+                font-size: 13px;
+            }
+            QPushButton:hover { background: #d35400; }
+        """)
+        self.ntp_restore_btn.clicked.connect(self._ntp_restore)
+        btn_layout.addWidget(self.ntp_restore_btn)
+        
+        self.ntp_status_btn = QPushButton(self._tr("获取状态", "Check Status"))
+        self.ntp_status_btn.setStyleSheet("""
+            QPushButton {
+                background: #0984e3;
+                color: white;
+                font-weight: bold;
+                padding: 8px 24px;
+                border: none;
+                border-radius: 4px;
+                font-size: 13px;
+            }
+            QPushButton:hover { background: #0873c4; }
+        """)
+        self.ntp_status_btn.clicked.connect(self._ntp_check_status)
+        btn_layout.addWidget(self.ntp_status_btn)
+        
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+        
+        layout.addStretch()
+        return page
+    
+    # ----------------------------------------------------------
+    #  NTP 时间同步标签页 - 辅助方法
+    # ----------------------------------------------------------
+    def _ntp_select_file(self):
+        """选择NTP服务器配置文件（Excel格式）"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            self._tr("选择服务器配置文件", "Select Server Config File"),
+            "",
+            self._tr("Excel 文件 (*.xlsx *.xls);;所有文件 (*.*)", "Excel Files (*.xlsx *.xls);;All Files (*.*)")
+        )
+        if file_path:
+            self.ntp_file_edit.setText(file_path)
+            self._ntp_load_servers(file_path)
+    
+    def _ntp_load_servers(self, file_path: str):
+        """从Excel文件加载服务器列表"""
+        try:
+            # 检查文件扩展名
+            if not file_path.endswith(('.xlsx', '.xls')):
+                raise ValueError(self._tr(
+                    "不支持的文件格式，请选择 .xlsx 或 .xls 文件",
+                    "Unsupported file format. Please select .xlsx or .xls file"
+                ))
+            
+            # 读取Excel文件
+            try:
+                import pandas as pd
+            except ImportError:
+                self._log(self._tr(
+                    "❌ 缺少依赖库: pandas，请运行: pip install pandas openpyxl",
+                    "❌ Missing dependency: pandas. Please run: pip install pandas openpyxl"
+                ))
+                return
+            
+            df = pd.read_excel(file_path)
+            
+            # 检查必需的列 - 支持两种格式
+            if all(col in df.columns for col in ['host', 'port', 'username', 'password']):
+                # 新格式: host, port, username, password
+                df = df.dropna(subset=['host', 'username', 'password'])
+                self.ntp_servers = []
+                for _, row in df.iterrows():
+                    server = {
+                        'host': str(row['host']).strip(),
+                        'port': int(row['port']) if pd.notna(row['port']) else 22,
+                        'username': str(row['username']).strip(),
+                        'password': str(row['password']).strip()
+                    }
+                    self.ntp_servers.append(server)
+            elif all(col in df.columns for col in ['IP', '用户名', '密码']):
+                # 旧格式: IP, 用户名, 密码
+                df = df.dropna(subset=['IP', '用户名', '密码'])
+                self.ntp_servers = []
+                for _, row in df.iterrows():
+                    server = {
+                        'host': str(row['IP']).strip(),
+                        'port': 22,  # 默认SSH端口
+                        'username': str(row['用户名']).strip(),
+                        'password': str(row['密码']).strip()
+                    }
+                    self.ntp_servers.append(server)
+            else:
+                raise ValueError(self._tr(
+                    "Excel文件格式错误！\n\n支持的格式：\n1. 新格式: host, port, username, password\n2. 旧格式: IP, 用户名, 密码",
+                    "Invalid Excel format!\n\nSupported formats:\n1. New: host, port, username, password\n2. Old: IP, 用户名, 密码"
+                ))
+            
+            # 更新服务器列表显示（使用自定义行控件）
+            self.ntp_server_list.clear()
+            self.ntp_row_widgets = []
+            for i, server in enumerate(self.ntp_servers, 1):
+                item = QListWidgetItem()
+                row_widget = NTPServerRowWidget(
+                    i, server['host'], server['port'], server['username'],
+                    lang=self.lang
+                )
+                item.setSizeHint(row_widget.sizeHint())
+                self.ntp_server_list.addItem(item)
+                self.ntp_server_list.setItemWidget(item, row_widget)
+                self.ntp_row_widgets.append(row_widget)
+            
+            self._log(self._tr(
+                f"✅ 成功加载 {len(self.ntp_servers)} 个服务器配置",
+                f"✅ Successfully loaded {len(self.ntp_servers)} server configurations"
+            ))
+        except Exception as e:
+            self._log(self._tr(
+                f"❌ 加载服务器配置失败: {str(e)}",
+                f"❌ Failed to load server config: {str(e)}"
+            ))
+            QMessageBox.warning(self, self._tr("错误", "Error"), f"{self._tr('加载配置文件失败', 'Failed to load config file')}:\n{str(e)}")
+    
+    def _ntp_clear_servers(self):
+        """清空服务器列表"""
+        self.ntp_servers = []
+        self.ntp_row_widgets = []
+        self.ntp_file_edit.clear()
+        self.ntp_server_list.clear()
+        self._log(self._tr("已清空服务器列表", "Server list cleared"))
+    
+    def _ntp_configure(self):
+        """执行NTP配置（批量，异步线程）"""
+        if not self.ntp_servers:
+            QMessageBox.warning(self,
+                self._tr("警告", "Warning"),
+                self._tr("请先选择服务器配置文件", "Please select a server config file first")
+            )
+            return
+
+        ntp_server = self.ntp_server_edit.text().strip()
+        if not ntp_server:
+            QMessageBox.warning(self,
+                self._tr("警告", "Warning"),
+                self._tr("请输入NTP服务器地址", "Please enter NTP server address")
+            )
+            return
+
+        minpoll = self.ntp_minpoll.value()
+        maxpoll = self.ntp_maxpoll.value()
+        step = self.ntp_step.value()
+        timezone = self.ntp_timezone.currentText().strip()
+
+        self._log(self._tr("="*60, "=" * 60))
+        self._log(self._tr("开始执行NTP配置...", "Starting NTP configuration..."))
+        self._log(self._tr(f"NTP服务器: {ntp_server}", f"NTP Server: {ntp_server}"))
+
+        def handler(client, server, log_fn):
+            host = server.get('host', '')
+            # 1. 备份
+            ssh_utils.ssh_exec(client, "cp /etc/chrony.conf /etc/chrony.conf.backup.$(date +%Y%m%d_%H%M%S)")
+            # 2. 生成配置
+            config_content = (
+                f"# Generated by Linux System Management Toolbox\n"
+                f"server {ntp_server} minpoll {minpoll} maxpoll {maxpoll}\n"
+                f"{'makestep 1.0 3' if step else '# makestep disabled'}\n"
+                f"driftfile /var/lib/chrony/drift\n"
+                f"rtcsync\n"
+                f"keyfile /etc/chrony.keys\n"
+                f"logdir /var/log/chrony\n"
+                f"log tracking measurements statistics\n"
+            )
+            ssh_utils.ssh_exec(client, f"cat > /etc/chrony.conf << 'EOF'\n{config_content}EOF")
+            # 3. 时区
+            if timezone:
+                ssh_utils.ssh_exec(client, f"timedatectl set-timezone {timezone}")
+            # 4. 重启服务
+            ssh_utils.ssh_exec(client, "systemctl restart chronyd")
+            ssh_utils.ssh_exec(client, "systemctl enable chronyd")
+            # 5. 检查
+            out, _ = ssh_utils.ssh_exec(client, "systemctl is-active chronyd")
+            if out.strip() == "active":
+                log_fn(f"✅ {host} NTP配置成功，服务正常运行")
+            else:
+                log_fn(f"⚠️ {host} 配置完成但服务状态异常: {out.strip()}")
+                raise RuntimeError(f"服务状态异常: {out.strip()}")
+
+        self._start_ntp_worker(handler)
+        
+        
+    def _ntp_restore(self):
+        """还原NTP配置（批量，异步线程）"""
+        if not self.ntp_servers:
+            QMessageBox.warning(self,
+                self._tr("警告", "Warning"),
+                self._tr("请先选择服务器配置文件", "Please select a server config file first")
+            )
+            return
+
+        reply = QMessageBox.question(
+            self,
+            self._tr("确认", "Confirm"),
+            self._tr("确定要还原所有服务器的NTP配置吗？", "Are you sure to restore NTP configuration for all servers?"),
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        self._log(self._tr("="*60, "=" * 60))
+        self._log(self._tr("开始还原NTP配置...", "Starting NTP configuration restore..."))
+
+        def handler(client, server, log_fn):
+            host = server.get('host', '')
+            out, _ = ssh_utils.ssh_exec(client, "ls -t /etc/chrony.conf.backup.* 2>/dev/null | head -1")
+            backup_file = out.strip()
+            if backup_file:
+                ssh_utils.ssh_exec(client, f"cp {backup_file} /etc/chrony.conf")
+                ssh_utils.ssh_exec(client, "systemctl restart chronyd")
+                log_fn(f"✅ {host} NTP配置还原成功（使用 {backup_file}）")
+            else:
+                log_fn(f"⚠️ {host} 未找到备份文件，跳过")
+                raise RuntimeError("未找到备份文件")
+
+        self._start_ntp_worker(handler)
+        
+    
+    def _ntp_check_status(self):
+        """获取NTP状态（批量，异步线程）"""
+        if not self.ntp_servers:
+            QMessageBox.warning(self,
+                self._tr("警告", "Warning"),
+                self._tr("请先选择服务器配置文件", "Please select a server config file first")
+            )
+            return
+
+        self._log(self._tr("="*60, "=" * 60))
+        self._log(self._tr("开始获取NTP状态...", "Starting NTP status check..."))
+
+        # 将所有行设为"检测中"状态
+        for row in getattr(self, 'ntp_row_widgets', []):
+            row.set_pending()
+
+        def handler(client, server, log_fn):
+            host = server.get('host', '')
+            # 1. 服务状态
+            out, _ = ssh_utils.ssh_exec(client, "systemctl is-active chronyd")
+            service_ok = (out.strip() == "active")
+            # 2. 同步状态
+            out, _ = ssh_utils.ssh_exec(client, "chronyc sources -v || chronyc sources")
+            synced = False
+            ntp_server_ip = "N/A"
+            for line in out.splitlines():
+                s = line.lstrip()
+                if s.startswith('^*') or s.startswith('*'):
+                    synced = True
+                    parts = s.lstrip('^*').split()
+                    if parts:
+                        ntp_server_ip = parts[0]
+                    break
+            # 3. 时间和时区
+            out, _ = ssh_utils.ssh_exec(client, "date '+%F %T'")
+            current_time = out.strip()
+            out, _ = ssh_utils.ssh_exec(client, "timedatectl")
+            if "Time zone:" in out:
+                timezone = out.split("Time zone:")[1].split("\n")[0].strip()
+            else:
+                timezone = "Unknown"
+
+            # 返回结构化结果（由 result 信号回传到行控件显示）
+            log_fn(f"  ✅ {host} " + self._tr("连接成功", "connected"))
+            return {
+                'status': 'ok' if service_ok and synced else 'warning',
+                'host': host,
+                'service': '正常' if service_ok else '异常',
+                'sync': '正常' if synced else '异常',
+                'ntp_source': ntp_server_ip,
+                'timezone': timezone,
+                'time': current_time,
+            }
+
+        self._start_ntp_worker(handler)
+
+    # ----------------------------------------------------------
+    #  NTP 工作线程管理
+    # ----------------------------------------------------------
+    def _start_ntp_worker(self, handler):
+        """启动NTP后台工作线程"""
+        # 如果有线程在跑，先停掉
+        if hasattr(self, '_ntp_worker') and self._ntp_worker and self._ntp_worker.isRunning():
+            self._ntp_worker.cancel()
+            self._ntp_worker.wait(3000)
+
+        self._ntp_worker = BatchSSHWorker(self)
+        self._ntp_worker.servers = list(self.ntp_servers)
+        self._ntp_worker.handler = handler
+        self._ntp_worker.connect_timeout = 5
+
+        # 连接信号
+        self._ntp_worker.log.connect(self._on_ntp_worker_log)
+        self._ntp_worker.progress.connect(self._on_ntp_worker_progress)
+        self._ntp_worker.finished_signal.connect(self._on_ntp_worker_finished)
+        self._ntp_worker.result.connect(self._on_ntp_worker_result)
+
+        # 禁用按钮，显示进度条
+        self.ntp_configure_btn.setEnabled(False)
+        self.ntp_restore_btn.setEnabled(False)
+        self.ntp_status_btn.setEnabled(False)
+        self.ntp_progress.setVisible(True)
+        self.ntp_progress.setValue(0)
+
+        self._ntp_worker.start()
+
+    def _on_ntp_worker_log(self, msg: str):
+        """工作线程日志输出"""
+        self._log(msg)
+
+    def _on_ntp_worker_progress(self, current: int, total: int):
+        """工作线程进度更新"""
+        pct = int(current / total * 100) if total > 0 else 0
+        self.ntp_progress.setValue(pct)
+
+    def _on_ntp_worker_finished(self, summary: str):
+        """工作线程完成"""
+        self._log(self._tr("\n" + "="*60, "\n" + "="*60))
+        self._log(summary)
+        # 恢复按钮
+        self.ntp_configure_btn.setEnabled(True)
+        self.ntp_restore_btn.setEnabled(True)
+        self.ntp_status_btn.setEnabled(True)
+        self.ntp_progress.setVisible(False)
+
+    def _on_ntp_worker_result(self, index: int, data: dict):
+        """工作线程回传单台服务器状态结果，更新对应行控件"""
+        row_widgets = getattr(self, 'ntp_row_widgets', [])
+        if 0 <= index < len(row_widgets):
+            row_widgets[index].set_status(data)
+    def _build_init_page(self) -> QWidget:
+        """构建系统初始化标签页"""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        
+        # 标题
+        title = QLabel(self._tr("系统初始化", "System Initialization"))
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #2d3436;")
+        layout.addWidget(title)
+        
+        # 分隔线
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet("background: #dfe6e9; max-height: 1px;")
+        layout.addWidget(line)
+        
+        # 顶部工具栏
+        tool_row = QHBoxLayout()
+        
+        self.init_import_btn = QPushButton(self._tr("📂 导入服务器列表 (Excel)", "📂 Import Server List (Excel)"))
+        self.init_import_btn.setStyleSheet("""
+            QPushButton {
+                background: #0984e3;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 4px;
+                font-size: 13px;
+            }
+            QPushButton:hover { background: #0873c4; }
+        """)
+        self.init_import_btn.clicked.connect(self._init_import_servers)
+        tool_row.addWidget(self.init_import_btn)
+        
+        self.init_path_label = QLabel(self._tr("未导入文件", "No file imported"))
+        self.init_path_label.setStyleSheet("color: #636e72;")
+        tool_row.addWidget(self.init_path_label, 1)
+        
+        self.init_add_btn = QPushButton(self._tr("➕ 手动添加", "➕ Manual Add"))
+        self.init_add_btn.setStyleSheet("""
+            QPushButton {
+                background: #f0f3f5;
+                color: #5b7a9a;
+                border: 1px solid #c8d0d8;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QPushButton:hover { background: #e4e8ec; }
+        """)
+        self.init_add_btn.clicked.connect(self._init_add_server)
+        tool_row.addWidget(self.init_add_btn)
+        
+        self.init_delete_btn = QPushButton(self._tr("✖ 删除选中", "✖ Delete Selected"))
+        self.init_delete_btn.setStyleSheet("""
+            QPushButton {
+                background: #d63031;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QPushButton:hover { background: #b3292a; }
+            QPushButton:disabled { background: #b2bec3; }
+        """)
+        self.init_delete_btn.clicked.connect(self._init_delete_selected)
+        tool_row.addWidget(self.init_delete_btn)
+        
+        # YUM状态检测按钮
+        self.init_yum_check_btn = QPushButton(self._tr("🔍 检测YUM状态", "🔍 Check YUM Status"))
+        self.init_yum_check_btn.setStyleSheet("""
+            QPushButton {
+                background: #00b894;
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QPushButton:hover { background: #00a884; }
+            QPushButton:disabled { background: #b2bec3; }
+        """)
+        self.init_yum_check_btn.clicked.connect(self._init_check_yum_status)
+        tool_row.addWidget(self.init_yum_check_btn)
+        
+        layout.addLayout(tool_row)
+        
+        # 中间区域：左侧配置 + 右侧表格
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # 左侧：初始化任务选择
+        left_widget = QFrame()
+        left_widget.setStyleSheet("QFrame { background: white; border: 1px solid #dfe6e9; border-radius: 8px; padding: 12px; }")
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(10, 10, 10, 10)
+        
+        config_title = QLabel(self._tr("⚙ 选择要应用的初始化配置", "⚙ Select Initialization Config"))
+        config_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #2d3436;")
+        config_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        left_layout.addWidget(config_title)
+        
+        # 全选复选框
+        self.init_select_all_cb = QCheckBox(self._tr("全选", "Select All"))
+        self.init_select_all_cb.setChecked(False)
+        self.init_select_all_cb.toggled.connect(self._init_on_select_all_toggled)
+        left_layout.addWidget(self.init_select_all_cb)
+        
+        # 任务复选框
+        self.init_task_checkboxes = []
+        task_items = [
+            ("firewall", self._tr("🛡 关闭防火墙 (firewalld / iptables)", "🛡 Disable Firewall")),
+            ("selinux", self._tr("🛡 关闭 SELinux 安全防护", "🛡 Disable SELinux")),
+            ("sshd_dns", self._tr("🚀 加速 SSHD (禁用 DNS 反向解析)", "🚀 Accelerate SSHD")),
+            ("rc_local", self._tr("⚙  启动 rc.local 开机服务)", "⚙ Enable rc.local")),
+            ("chrony", self._tr("⏱ 安装并启用 Chronyd 时间同步)", "⏱ Install Chrony")),
+            ("ftp", self._tr("📦 安装 vsftpd (FTP)", "📦 Install FTP")),
+            ("telnet", self._tr("📦 安装 Telnet 应急服务)", "📦 Install Telnet")),
+            ("python2", self._tr("🐍 安装 Python2 + 软链接)", "🐍 Install Python2")),
+            ("gdb", self._tr("🔧 安装 GDB 调试器)", "🔧 Install GDB")),
+        ]
+        
+        for code, label in task_items:
+            chk = QCheckBox(label)
+            chk.setProperty("code", code)
+            chk.toggled.connect(self._init_on_checkbox_toggled)
+            self.init_task_checkboxes.append(chk)
+            left_layout.addWidget(chk)
+        
+        left_layout.addStretch()
+        splitter.addWidget(left_widget)
+        
+        # 右侧：服务器表格
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # YUM检测开关
+        self.init_yum_check_cb = QCheckBox(self._tr("YUM 源检测（启动前自动验证 YUM 可用性）", "YUM Check (Auto-verify YUM before start)"))
+        self.init_yum_check_cb.setChecked(True)
+        right_layout.addWidget(self.init_yum_check_cb)
+        
+        # 服务器表格
+        self.init_table = QTableWidget()
+        self.init_table.setColumnCount(5)  # □ + IP + port + user + YUM状态
+        self.init_table.setHorizontalHeaderLabels([
+            "", self._tr("IP地址", "IP Address"),
+            self._tr("端口", "Port"),
+            self._tr("用户名", "Username"),
+            self._tr("YUM源状态", "YUM Status")
+        ])
+        self.init_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.init_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.init_table.setAlternatingRowColors(True)
+        self.init_table.verticalHeader().setVisible(False)  # 隐藏默认行号
+        self.init_table.verticalHeader().setDefaultSectionSize(32)  # 行高32px
+        # 列宽策略：勾选列固定，IP/用户名/YUM状态拉伸，端口固定
+        header = self.init_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)  # 勾选列
+        header.resizeSection(0, 40)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # IP列拉伸
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)  # 端口列
+        header.resizeSection(2, 70)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)  # 用户名列
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)  # YUM状态列
+        header.setStretchLastSection(False)  # 不要让最后一列自动填充
+        header.setMinimumHeight(36)  # 表头高度
+        header.setHighlightSections(False)
+        # 美化表格样式
+        self.init_table.setShowGrid(True)
+        self.init_table.setStyleSheet("""
+            QTableWidget {
+                border: 1px solid #dfe6e9;
+                border-radius: 6px;
+                background: white;
+                gridline-color: #ecf0f1;
+                font-size: 12px;
+                selection-background-color: #74b9ff;
+                selection-color: white;
+            }
+            QTableWidget::item {
+                padding: 6px 8px;
+                border: none;
+            }
+            QTableWidget::item:selected {
+                background: #74b9ff;
+                color: white;
+            }
+            QHeaderView::section {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #f8f9fa, stop:1 #e9ecef);
+                color: #2d3436;
+                padding: 8px;
+                border: none;
+                border-right: 1px solid #dfe6e9;
+                border-bottom: 2px solid #00b894;
+                font-weight: bold;
+                font-size: 12px;
+            }
+            QTableWidget::item:alternate {
+                background: #fafbfc;
+            }
+        """)
+        right_layout.addWidget(self.init_table)
+        
+        splitter.addWidget(right_widget)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([210, 900])
+        layout.addWidget(splitter, 1)
+        
+        # 底部按钮栏
+        bottom_layout = QHBoxLayout()
+        bottom_layout.addStretch()
+        
+        self.init_stop_btn = QPushButton(self._tr("⏹ 停止全部", "⏹ Stop All"))
+        self.init_stop_btn.setStyleSheet("""
+            QPushButton {
+                background: #d63031;
+                color: white;
+                border: none;
+                padding: 8px 20px;
+                border-radius: 4px;
+                font-size: 13px;
+            }
+            QPushButton:hover { background: #b3292a; }
+            QPushButton:disabled { background: #b2bec3; }
+        """)
+        self.init_stop_btn.setEnabled(False)
+        self.init_stop_btn.clicked.connect(self._init_stop_all)
+        bottom_layout.addWidget(self.init_stop_btn)
+        
+        self.init_run_btn = QPushButton(self._tr("🚀 一键批量初始化", "🚀 Batch Initialize"))
+        self.init_run_btn.setStyleSheet("""
+            QPushButton {
+                background: #0984e3;
+                color: white;
+                border: none;
+                padding: 10px 24px;
+                border-radius: 4px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background: #0873c4; }
+            QPushButton:disabled { background: #b2bec3; }
+        """)
+        self.init_run_btn.clicked.connect(self._init_run_all)
+        bottom_layout.addWidget(self.init_run_btn)
+        
+        layout.addLayout(bottom_layout)
+        
+        return page
+    
+    # ----------------------------------------------------------
+    #  系统初始化标签页 - 完整实现
+    # ----------------------------------------------------------
+    
+    # 任务命令定义
+    INIT_TASKS = {
+        "firewall": [
+            ("systemctl stop firewalld 2>/dev/null; systemctl disable firewalld 2>/dev/null", "关闭 firewalld"),
+            ("service iptables stop 2>/dev/null; chkconfig iptables off 2>/dev/null", "关闭 iptables"),
+        ],
+        "selinux": [
+            ("sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config 2>/dev/null", "禁用 SELinux (重启后生效)"),
+        ],
+        "sshd_dns": [
+            ("sed -i 's/^#*UseDNS.*/UseDNS no/' /etc/ssh/sshd_config", "禁用 SSHD DNS 反向解析"),
+            ("systemctl restart sshd 2>/dev/null", "重启 SSHD 服务"),
+        ],
+        "rc_local": [
+            ("chmod +x /etc/rc.d/rc.local 2>/dev/null", "添加 rc.local 执行权限"),
+            ("systemctl enable rc-local 2>/dev/null", "启用 rc-local 服务"),
+        ],
+        "ntp_off": [
+            ("systemctl stop ntpd 2>/dev/null; systemctl disable ntpd 2>/dev/null", "关闭 NTPD 服务"),
+            ("systemctl stop ntp 2>/dev/null; systemctl disable ntp 2>/dev/null", "关闭 NTP 服务"),
+        ],
+        "chrony": [
+            ("yum install -y chrony 2>/dev/null || apt install -y chrony 2>/dev/null", "安装 Chrony"),
+            ("systemctl enable chronyd 2>/dev/null", "启用 Chronyd 服务"),
+        ],
+        "ftp": [
+            ("yum install -y vsftpd 2>/dev/null || apt install -y vsftpd 2>/dev/null", "安装 vsftpd"),
+            ("systemctl enable vsftpd 2>/dev/null", "启用 vsftpd 服务"),
+        ],
+        "telnet": [
+            ("yum install -y telnet-server 2>/dev/null || apt install -y telnetd 2>/dev/null", "安装 Telnet 服务"),
+        ],
+        "python2": [
+            ("yum install -y python2 2>/dev/null || apt install -y python2 2>/dev/null", "安装 Python2"),
+            ("ln -sf /usr/bin/python2 /usr/bin/python2.7 2>/dev/null", "创建 Python2 软链接"),
+        ],
+        "gdb": [
+            ("yum install -y gdb 2>/dev/null || apt install -y gdb 2>/dev/null", "安装 GDB 调试器"),
+        ],
+    }
+    
+    def _init_import_servers(self):
+        """从Excel文件导入服务器列表"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            self._tr("导入服务器列表 (Excel)", "Import Server List (Excel)"),
+            "",
+            self._tr("Excel 文件 (*.xlsx *.xls);;所有文件 (*.*)", "Excel Files (*.xlsx *.xls);;All Files (*.*)")
+        )
+        
+        if not file_path:
+            return
+            
+        try:
+            # 检查文件扩展名
+            if not file_path.endswith(('.xlsx', '.xls')):
+                raise ValueError(self._tr(
+                    "不支持的文件格式，请选择 .xlsx 或 .xls 文件",
+                    "Unsupported file format. Please select .xlsx or .xls file"
+                ))
+            
+            # 读取Excel文件
+            try:
+                import pandas as pd
+            except ImportError:
+                self._log(self._tr(
+                    "❌ 缺少依赖库: pandas，请运行: pip install pandas openpyxl",
+                    "❌ Missing dependency: pandas. Please run: pip install pandas openpyxl"
+                ))
+                return
+            
+            df = pd.read_excel(file_path)
+            
+            # 检查必需的列 - 支持两种格式
+            if all(col in df.columns for col in ['host', 'port', 'username', 'password']):
+                # 新格式: host, port, username, password
+                df = df.dropna(subset=['host', 'username', 'password'])
+                servers = []
+                for _, row in df.iterrows():
+                    server = {
+                        'host': str(row['host']).strip(),
+                        'port': int(row['port']) if pd.notna(row['port']) else 22,
+                        'username': str(row['username']).strip(),
+                        'password': str(row['password']).strip()
+                    }
+                    servers.append(server)
+            elif all(col in df.columns for col in ['IP', '用户名', '密码']):
+                # 旧格式: IP, 用户名, 密码
+                df = df.dropna(subset=['IP', '用户名', '密码'])
+                servers = []
+                for _, row in df.iterrows():
+                    server = {
+                        'host': str(row['IP']).strip(),
+                        'port': 22,  # 默认SSH端口
+                        'username': str(row['用户名']).strip(),
+                        'password': str(row['密码']).strip()
+                    }
+                    servers.append(server)
+            else:
+                raise ValueError(self._tr(
+                    "Excel文件格式错误！\n\n支持的格式：\n1. 新格式: host, port, username, password\n2. 旧格式: IP, 用户名, 密码",
+                    "Invalid Excel format!\n\nSupported formats:\n1. New: host, port, username, password\n2. Old: IP, 用户名, 密码"
+                ))
+            
+            self.init_servers = servers
+            self._init_update_table()
+            self._init_check_yum_status()  # 导入后自动检测YUM状态
+            
+            self.init_path_label.setText(file_path)
+            self._log(self._tr(
+                f"✅ 成功导入 {len(servers)} 个服务器",
+                f"✅ Successfully imported {len(servers)} servers"
+            ))
+            
+        except Exception as e:
+            self._log(self._tr(
+                f"❌ 导入失败: {str(e)}",
+                f"❌ Import failed: {str(e)}"
+            ))
+            QMessageBox.warning(self, "错误", f"导入服务器列表失败:\n{str(e)}")
+    
+    def _init_add_server(self):
+        """手动添加服务器"""
+        from PySide6.QtWidgets import QDialog, QFormLayout, QDialogButtonBox
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self._tr("添加服务器", "Add Server"))
+        dialog.setModal(True)
+        
+        layout = QFormLayout(dialog)
+        
+        host_edit = QLineEdit("192.168.1.100")
+        layout.addRow(self._tr("IP地址:", "IP Address:"), host_edit)
+        
+        port_edit = QLineEdit("22")
+        layout.addRow(self._tr("端口:", "Port:"), port_edit)
+        
+        user_edit = QLineEdit("root")
+        layout.addRow(self._tr("用户名:", "Username:"), user_edit)
+        
+        pwd_edit = QLineEdit("")
+        pwd_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        layout.addRow(self._tr("密码:", "Password:"), pwd_edit)
+        
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            server = {
+                "host": host_edit.text().strip(),
+                "port": int(port_edit.text().strip()),
+                "username": user_edit.text().strip(),
+                "password": pwd_edit.text()
+            }
+            self.init_servers.append(server)
+            self._init_update_table()
+            self._init_check_yum_status()  # 添加后自动检测YUM状态
+            self._log(self._tr(
+                f"✅ 已添加服务器: {server['host']}",
+                f"✅ Added server: {server['host']}"
+            ))
+    
+    def _init_delete_selected(self):
+        """删除选中的服务器"""
+        if not hasattr(self, 'init_table'):
+            return
+            
+        selected_rows = []
+        for row in range(self.init_table.rowCount()):
+            item = self.init_table.cellWidget(row, 0)
+            if item:
+                checkbox = item.findChild(QCheckBox)
+                if checkbox and checkbox.isChecked():
+                    selected_rows.append(row)
+        
+        if not selected_rows:
+            QMessageBox.information(self, 
+                self._tr("提示", "Information"), 
+                self._tr("请先选择要删除的服务器", "Please select servers to delete")
+            )
+            return
+            
+        # 从后往前删除，避免索引错乱
+        for row in sorted(selected_rows, reverse=True):
+            if row < len(self.init_servers):
+                host = self.init_servers[row].get('host', 'unknown')
+                del self.init_servers[row]
+                self._log(self._tr(
+                    f"🗑️ 已删除服务器: {host}",
+                    f"🗑️ Deleted server: {host}"
+                ))
+        
+        self._init_update_table()
+    
+    def _init_update_table(self):
+        """更新服务器表格"""
+        if not hasattr(self, 'init_table'):
+            return
+            
+        self.init_table.setRowCount(len(self.init_servers))
+        
+        for row, server in enumerate(self.init_servers):
+            # 复选框
+            checkbox = QCheckBox()
+            checkbox.setChecked(True)
+            checkbox_widget = QWidget()
+            layout = QHBoxLayout(checkbox_widget)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(checkbox)
+            self.init_table.setCellWidget(row, 0, checkbox_widget)
+            
+            # IP地址
+            self.init_table.setItem(row, 1, QTableWidgetItem(server.get('host', '')))
+            
+            # 端口
+            port_item = QTableWidgetItem(str(server.get('port', 22)))
+            port_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.init_table.setItem(row, 2, port_item)
+            
+            # 用户名
+            self.init_table.setItem(row, 3, QTableWidgetItem(server.get('username', 'root')))
+            
+            # YUM状态（初始为未检测）
+            yum_item = QTableWidgetItem("⚠️ 未检测")
+            yum_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.init_table.setItem(row, 4, yum_item)
+        
+        self._log(self._tr(
+            f"📊 服务器列表已更新: {len(self.init_servers)} 个服务器",
+            f"📊 Server list updated: {len(self.init_servers)} servers"
+        ))
+
+    def _init_yum_check_handler(self, client, server, log_fn):
+        """YUM状态检测handler：在远程服务器上执行yum repolist"""
+        host = server.get('host', '')
+        try:
+            cmd = "yum repolist 2>&1"
+            out, err = ssh_utils.ssh_exec(client, cmd)
+            if err:
+                return {'status': 'error', 'host': host, 'error': err[:100]}
+            # 检查输出中是否有可用的仓库
+            if out and ('repo' in out.lower() or '仓库' in out or 'repolist' in out.lower()):
+                # 提取仓库数量（尝试从输出中解析）
+                lines = [l.strip() for l in out.splitlines() if l.strip() and not l.startswith('#')]
+                repo_count = 0
+                for line in lines[1:]:  # 跳过标题行
+                    if line[0].isdigit() or line.startswith('repo'):
+                        repo_count += 1
+                return {'status': 'ok', 'host': host, 'repo_count': repo_count, 'output': out[:200]}
+            else:
+                return {'status': 'error', 'host': host, 'error': 'yum不可用或无可⽤仓库'}
+        except Exception as e:
+            return {'status': 'error', 'host': host, 'error': str(e)[:100]}
+
+    def _init_check_yum_status(self):
+        """批量检测所有服务器的YUM源状态"""
+        if not hasattr(self, 'init_servers') or not self.init_servers:
+            return
+        
+        # 先停止之前的检测线程
+        if self._init_yum_check_worker and self._init_yum_check_worker.isRunning():
+            self._init_yum_check_worker.cancel()
+            self._init_yum_check_worker.wait(2000)
+        
+        # 更新表格状态为"检测中"
+        for row in range(self.init_table.rowCount()):
+            item = self.init_table.item(row, 4)
+            if item:
+                item.setText("⏳ 检测中...")
+                item.setForeground(QColor("#0984e3"))
+        
+        self._log(self._tr(
+            f"🔍 开始检测 {len(self.init_servers)} 个服务器的YUM源状态...",
+            f"🔍 Checking YUM status for {len(self.init_servers)} servers..."
+        ))
+        
+        # 禁用按钮，防止重复点击
+        self.init_yum_check_btn.setEnabled(False)
+        
+        # 创建批量SSH工作线程
+        self._init_yum_check_worker = BatchSSHWorker()
+        self._init_yum_check_worker.servers = self.init_servers
+        self._init_yum_check_worker.handler = self._init_yum_check_handler
+        self._init_yum_check_worker.log.connect(self._log)
+        self._init_yum_check_worker.result.connect(self._init_on_yum_check_result)
+        self._init_yum_check_worker.finished_signal.connect(
+            lambda msg: self._on_init_yum_check_finished(msg)
+        )
+        self._init_yum_check_worker.start()
+
+    def _on_init_yum_check_finished(self, msg: str):
+        """YUM检测完成，恢复按钮状态"""
+        self.init_yum_check_btn.setEnabled(True)
+        self._log(self._tr(f"✅ YUM状态检测完成: {msg}", f"✅ YUM check done: {msg}"))
+
+    def _init_on_yum_check_result(self, index: int, data: dict):
+        """处理YUM检测结果，更新表格"""
+        if not hasattr(self, 'init_table'):
+            return
+        if index >= self.init_table.rowCount():
+            return
+        
+        item = self.init_table.item(index, 4)
+        if not item:
+            item = QTableWidgetItem()
+            self.init_table.setItem(index, 4, item)
+        
+        status = data.get('status', 'unknown')
+        host = data.get('host', '')
+        
+        if status == 'ok':
+            repo_count = data.get('repo_count', 0)
+            text = f"✅ 正常({repo_count}个仓库)" if repo_count else "✅ 正常"
+            color = "#00b894"
+        else:
+            error = data.get('error', '未知错误')
+            text = f"❌ {error[:30]}"
+            color = "#d63031"
+        
+        item.setText(text)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        item.setForeground(QColor(color))
+        
+        # 日志只记录异常
+        if status != 'ok':
+            self._log(self._tr(
+                f"⚠️ {host} YUM源异常: {error}",
+                f"⚠️ {host} YUM unavailable: {error}"
+            ))
+
+    def _init_on_select_all_toggled(self, checked):
+        """全选/取消全选任务"""
+        for chk in self.init_task_checkboxes:
+            chk.setChecked(checked)
+    
+    def _init_on_checkbox_toggled(self):
+        """更新全选复选框状态"""
+        checked = sum(1 for chk in self.init_task_checkboxes if chk.isChecked())
+        total = len(self.init_task_checkboxes)
+        if checked == 0:
+            self.init_select_all_cb.setCheckState(Qt.CheckState.Unchecked)
+        elif checked == total:
+            self.init_select_all_cb.setCheckState(Qt.CheckState.Checked)
+        else:
+            self.init_select_all_cb.setCheckState(Qt.CheckState.PartiallyChecked)
+    
+    def _init_get_selected_tasks(self):
+        """获取选中的任务命令列表"""
+        tasks = []
+        for chk in self.init_task_checkboxes:
+            if chk.isChecked():
+                code = chk.property("code")
+                if code in self.INIT_TASKS:
+                    tasks.extend(self.INIT_TASKS[code])
+        return tasks
+    
+    def _init_run_all(self):
+        """执行批量初始化（异步线程）"""
+        if not hasattr(self, 'init_servers') or not self.init_servers:
+            QMessageBox.warning(self,
+                self._tr("警告", "Warning"),
+                self._tr("请先导入服务器列表", "Please import server list first")
+            )
+            return
+
+        tasks = self._init_get_selected_tasks()
+        if not tasks:
+            QMessageBox.warning(self,
+                self._tr("警告", "Warning"),
+                self._tr("请至少选择一个初始化任务", "Please select at least one initialization task")
+            )
+            return
+
+        self._log(self._tr("="*60, "=" * 60))
+        self._log(self._tr("开始执行批量初始化...", "Starting batch initialization..."))
+        self._log(self._tr(f"选中任务数: {len(tasks)}", f"Selected tasks: {len(tasks)}"))
+
+        def handler(client, server, log_fn):
+            host = server.get('host', '')
+            for cmd, desc in tasks:
+                log_fn(f"  ▶ {desc}")
+                out, err = ssh_utils.ssh_exec(client, cmd)
+                if out:
+                    for line in out.splitlines():
+                        if line.strip():
+                            log_fn(f"    {line.strip()}")
+                if err:
+                    log_fn(f"    ⚠️ {err[:200]}")
+            log_fn(f"  ✅ {host} 初始化完成")
+
+        # 如果有线程在跑，先停掉
+        if hasattr(self, '_init_worker') and self._init_worker and self._init_worker.isRunning():
+            self._init_worker.cancel()
+            self._init_worker.wait(3000)
+
+        self._init_worker = BatchSSHWorker(self)
+        self._init_worker.servers = list(self.init_servers)
+        self._init_worker.handler = handler
+        self._init_worker.connect_timeout = 5
+
+        self._init_worker.log.connect(self._on_init_worker_log)
+        self._init_worker.progress.connect(self._on_init_worker_progress)
+        self._init_worker.finished_signal.connect(self._on_init_worker_finished)
+
+        self.init_run_btn.setEnabled(False)
+        self.init_stop_btn.setEnabled(True)
+        self._init_worker.start()
+
+    def _on_init_worker_log(self, msg: str):
+        self._log(msg)
+
+    def _on_init_worker_progress(self, current: int, total: int):
+        pass  # 初始化页面无进度条，日志中已有进度
+
+    def _on_init_worker_finished(self, summary: str):
+        self._log(self._tr("\n" + "="*60, "\n" + "="*60))
+        self._log(summary)
+        self.init_run_btn.setEnabled(True)
+        self.init_stop_btn.setEnabled(False)
+
+    def _init_stop_all(self):
+        """停止初始化任务"""
+        if hasattr(self, '_init_worker') and self._init_worker and self._init_worker.isRunning():
+            self._init_worker.cancel()
+            self._log(self._tr("正在停止任务...", "Stopping tasks..."))
+        else:
+            self._log(self._tr("没有正在执行的任务", "No running tasks"))
 
 # ============================================================
 #  CLI 模式（供 launcher 静默调用）

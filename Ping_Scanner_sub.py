@@ -124,9 +124,11 @@ class IpCell(QFrame):
 
 
 class PingScanner(QWidget):
-    def __init__(self):
+    def __init__(self, lang="zh"):
         super().__init__()
-        self.setWindowTitle("网段 Ping 扫描器")
+        self.lang = lang
+        title = "Ping Scanner" if self.lang == "en" else "网段 Ping 扫描器"
+        self.setWindowTitle(title)
         self.setMinimumSize(680, 520)
         self.cells = []
         self.worker = None
@@ -149,6 +151,10 @@ class PingScanner(QWidget):
         self.logger.info("PingScanner initialized")
 
         self._setup_ui()
+
+    def _tr(self, zh: str, en: str) -> str:
+        """根据当前语言返回对应文本"""
+        return en if self.lang == "en" else zh
 
     def _setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -188,14 +194,14 @@ class PingScanner(QWidget):
 
         input_row.addStretch()
 
-        self.start_btn = QPushButton("开始扫描")
+        self.start_btn = QPushButton("Start Scan" if self.lang == "en" else self._tr("开始扫描", "Start Scan"))
         self.start_btn.setFixedWidth(100)
         self.start_btn.setFixedHeight(26)
         self.start_btn.setStyleSheet("QPushButton { background: #1976d2; color: white; border: none; padding: 4px 12px; border-radius: 3px; font-weight: bold; } QPushButton:disabled { background: #bbb; } QPushButton:hover { background: #1565c0; }")
         self.start_btn.clicked.connect(self.start_scan)
         input_row.addWidget(self.start_btn)
 
-        self.stop_btn = QPushButton("停止")
+        self.stop_btn = QPushButton("Stop" if self.lang == "en" else self._tr("停止", "Stop"))
         self.stop_btn.setFixedWidth(80)
         self.stop_btn.setFixedHeight(26)
         self.stop_btn.setEnabled(False)
