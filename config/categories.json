@@ -1,0 +1,40 @@
+{
+  "categories": [
+    {
+      "id": "linux",
+      "name": "Linux相关类",
+      "name_en": "Linux",
+      "icon": "🐧",
+      "description": "Chrony、YUM、Docker、系统初始化",
+      "description_en": "Chrony, YUM, Docker, System Init",
+      "plugins": ["chrony_ntp_sync", "yum_manager", "docker_tools", "linux_tools", "system_init"]
+    },
+    {
+      "id": "network",
+      "name": "网络相关类",
+      "name_en": "Network",
+      "icon": "🌐",
+      "description": "Ping 扫描、IPv6 计算、密码工具",
+      "description_en": "Ping scan, IPv6 calculator, password tools",
+      "plugins": ["ping_scanner", "ipv6_calculator"]
+    },
+    {
+      "id": "telecom",
+      "name": "网元相关类",
+      "name_en": "Telecom NE",
+      "icon": "📡",
+      "description": "IMS 抓包升级",
+      "description_en": "IMS capture/upgrade",
+      "plugins": ["ims_tool"]
+    },
+    {
+      "id": "other",
+      "name": "其它工具类",
+      "name_en": "Other Tools",
+      "icon": "🔧",
+      "description": "密码生成、哈希计算、PDF 处理等通用工具",
+      "description_en": "Password, hash, PDF and other tools",
+      "plugins": ["password_generator", "hash_calculator", "pdf_tools"]
+    }
+  ]
+}
