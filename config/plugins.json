@@ -78,7 +78,7 @@
       "name": "docker_tools",
       "display_name": "Docker自动化",
       "display_name_en": "Docker Automation",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "class_name": "DockerPlugin",
       "icon": "🐳",
       "description": "远程 Docker 管理：容器、镜像、网络、批量操作",
