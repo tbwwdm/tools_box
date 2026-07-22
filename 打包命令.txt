@@ -1,18 +1,31 @@
-$all_modules = Get-ChildItem -Filter "*.py" | Where-Object { $_.Name -ne "Toolbox_Main.py" } | ForEach-Object { "--include-module=" + $_.BaseName }
-python -m nuitka Toolbox_Main.py `
-    --standalone `
-    --msvc=latest `
-    --enable-plugin=pyside6 `
-    --windows-console-mode=hide `
-    --follow-imports `
-    --assume-yes-for-downloads `
-    --remove-output `
-    --company-name="Genew" `
-    --product-name="Toolbox" `
-    --file-version=1.0.0 `
-    --product-version=1.0.0 `
-    --jobs=8 `
-    --include-data-dir=input=input `
-    --include-data-dir=config=config `
-    --windows-icon-from-ico=E:\08.Python\000icologo\bee.ico `
-    $all_modules
+=========================
+ 工具箱 — 打包命令
+=========================
+
+[环境]
+使用项目 .venv 的 Python 3.11：
+  .venv\Scripts\python.exe
+
+[1] 编译插件（生成 .pyd）
+----------------------------------------
+用法：python build/build_plugin.py <插件名>
+
+示例：
+  .venv\Scripts\python build\build_plugin.py docker_tools
+  .venv\Scripts\python build\build_plugin.py demo_plugin
+
+产出：plugins\<插件名>.pyd
+
+[2] 打包主程序（生成单 exe）
+----------------------------------------
+用法：python build/build_main.py
+
+  .venv\Scripts\python build\build_main.py
+
+产出：main.dist\main.exe（附 config + plugins）
+
+[3] 开发模式运行（.py 直接跑）
+----------------------------------------
+  .venv\Scripts\python main.py
+
+=========================

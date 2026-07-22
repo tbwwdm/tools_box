@@ -1,9 +1,0 @@
-{
-  "Docker自动化": true,
-  "YUM源管理器": true,
-  "IMS工具": true,
-  "网段Ping扫描器": true,
-  "Linux工具集": true,
-  "密码生成器": true,
-  "PDF工具集": true
-}
