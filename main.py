@@ -35,7 +35,7 @@ PLUGINS_JSON = os.path.join(CONFIG_DIR, "plugins.json")
 CATEGORIES_JSON = os.path.join(CONFIG_DIR, "categories.json")
 VERSION_URL = (
     "https://raw.githubusercontent.com/LegendaryScriptGenew/"
-    "tools_box/main/config/plugins.json"
+    "tools_box/master/config/plugins.json"
 )
 
 # ── 日志 ─────────────────────────────────────────────────────
@@ -261,7 +261,10 @@ class UpdateDialog(QDialog):
 
     def _done(self, choice: bool):
         self._user_choice = choice
-        self.accept()
+        if choice:
+            self.accept()
+        else:
+            self.reject()
 
     def user_wants_update(self) -> bool:
         return self._user_choice is True
@@ -269,6 +272,8 @@ class UpdateDialog(QDialog):
 
 class ProgressDialog(QDialog):
     """更新下载进度对话框。"""
+
+    progress_changed = Signal(int, int)  # (downloaded, total)
 
     def __init__(self, plugin_name: str, parent=None):
         super().__init__(parent)
@@ -278,6 +283,8 @@ class ProgressDialog(QDialog):
         self.setWindowFlags(
             self.windowFlags() & ~Qt.WindowCloseButtonHint
         )
+
+        self.progress_changed.connect(self._on_progress)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
@@ -304,7 +311,7 @@ class ProgressDialog(QDialog):
         """)
         layout.addWidget(self._bar)
 
-    def set_progress(self, downloaded: int, total: int):
+    def _on_progress(self, downloaded: int, total: int):
         pct = int(downloaded / total * 100) if total > 0 else 0
         self._bar.setValue(pct)
         self._label.setText(
@@ -474,11 +481,13 @@ class MainWindow(QMainWindow):
         self._categories = load_categories()
         self._plugins_map = load_plugins()
         self._plugin_mgr = PluginManager(PLUGINS_DIR)
-        self._plugin_updater = PluginUpdater(VERSION_URL, PLUGINS_DIR, timeout=3)
+        self._plugin_updater = PluginUpdater(VERSION_URL, PLUGINS_DIR,
+                                             config_path=PLUGINS_JSON, timeout=3)
 
         # ── 运行态 ──
         self._loaded_plugin_windows: dict[str, list[QWidget]] = {}
         self._upgrade_info: Optional[tuple] = None
+        self._progress_dlg: Optional[QDialog] = None
 
         # 连接跨线程信号
         self._launch_ready.connect(self._do_launch)
@@ -832,9 +841,7 @@ class MainWindow(QMainWindow):
         def _download():
             ok = self._plugin_updater.download_plugin(
                 pname, url,
-                progress_callback=lambda d, t: QTimer.singleShot(
-                    0, lambda: progress_dlg.set_progress(d, t)
-                ),
+                progress_callback=lambda d, t, dlg=progress_dlg: dlg.progress_changed.emit(d, t),
             )
             if ok:
                 self._plugin_updater.set_local_version(pname, version)
@@ -877,31 +884,44 @@ class MainWindow(QMainWindow):
         pname = plugin_info.get("name", "")
         url = update_info.get("download_url", "")
 
-        progress_dlg = ProgressDialog(
+        self._progress_dlg = ProgressDialog(
             plugin_info.get("display_name", pname), self
         )
-        progress_dlg.show()
+        self._progress_dlg.show()
 
         def _download():
             ok = self._plugin_updater.download_plugin(
                 pname, url,
-                progress_callback=lambda d, t: QTimer.singleShot(
-                    0, lambda: progress_dlg.set_progress(d, t)
-                ),
+                progress_callback=lambda d, t, dlg=self._progress_dlg: dlg.progress_changed.emit(d, t),
             )
             if ok:
                 self._plugin_updater.set_local_version(
                     pname, update_info.get("remote_version", "0.0.0")
                 )
-            QTimer.singleShot(0, progress_dlg.close)
-            # 用信号切回主线程，安全启动插件
-            QTimer.singleShot(0, lambda: self._do_launch(pname))
+                self._plugins_map[pname]["version"] = update_info.get("remote_version", "0.0.0")
+            # 切回主线程：关闭进度窗 + 启动插件
+            self._launch_ready.emit(f"__dl_done__:{pname}")
 
         thread = threading.Thread(target=_download, daemon=True)
         thread.start()
 
     def _do_launch(self, plugin_name: str):
         """加载插件 .pyd 并打开独立窗口（由信号触发，主线程执行）。"""
+        # 下载完成：关闭进度窗，刷新版本显示，继续加载
+        if plugin_name.startswith("__dl_done__:"):
+            pname = plugin_name.split(":", 1)[1]
+            if self._progress_dlg:
+                self._progress_dlg.close()
+                self._progress_dlg = None
+            # 刷新网格显示最新版本
+            self._plugins_map = load_plugins()
+            for cat in self._categories:
+                if pname in cat.get("plugins", []):
+                    self._grid_page.show_category(cat, self._plugins_map)
+                    break
+            self._do_launch(pname)
+            return
+
         # 特殊值：弹更新提示
         if plugin_name == "__update_prompt__":
             if self._upgrade_info:

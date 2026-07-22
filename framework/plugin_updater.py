@@ -22,15 +22,17 @@ class PluginUpdater:
     """插件自动更新器。"""
 
     def __init__(self, version_url: str, plugins_dir: str = None,
-                 timeout: int = 15):
+                 config_path: str = None, timeout: int = 15):
         """
         Args:
             version_url: GitHub 上 plugins.json 的 RAW 地址
             plugins_dir: 本地插件目录（None=自动）
+            config_path: 本地 config/plugins.json 路径（None=从 plugins_dir 推导）
             timeout:     HTTP 请求超时（秒）
         """
         self._version_url = version_url
         self._plugins_dir = plugins_dir or self._default_plugins_dir()
+        self._config_path = config_path
         self._timeout = timeout
         self._update_results: list[dict] = []
 
@@ -42,13 +44,26 @@ class PluginUpdater:
             base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         return os.path.join(base, "plugins")
 
+    # ── 下载 URL 自动生成 ─────────────────────────────────
+
+    @staticmethod
+    def _build_download_url(plugin_name: str, version: str) -> str:
+        """根据插件名和版本自动生成 GitHub Release 下载链接。"""
+        return (
+            f"https://github.com/LegendaryScriptGenew/"
+            f"tools_box/releases/download/v{version}/{plugin_name}.pyd"
+        )
+
     # ── 远程 plugins.json 解析 ─────────────────────────────
 
     def fetch_remote_manifest(self) -> Optional[dict]:
         """从 GitHub 获取远程插件清单。"""
         try:
+            # 加随机参数绕过 CDN 缓存
+            import random
+            url = f"{self._version_url}?_={random.randint(0, 999999)}"
             req = urllib.request.Request(
-                self._version_url,
+                url,
                 headers={"User-Agent": "Toolbox-Updater/1.0"},
             )
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
@@ -64,22 +79,51 @@ class PluginUpdater:
             logger.warning("Failed to parse manifest: %s", exc)
         return None
 
-    # ── 本地版本读写 ────────────────────────────────────────
+    # ── 本地版本读写（基于 config/plugins.json） ───────────
+
+    @property
+    def _local_config_path(self) -> str:
+        """config/plugins.json 路径。"""
+        if self._config_path:
+            return self._config_path
+        base = os.path.dirname(self._plugins_dir)  # plugins/ 的上一级
+        return os.path.join(base, "config", "plugins.json")
 
     def get_local_version(self, plugin_name: str) -> Optional[str]:
-        """读取本地插件的版本标记文件。"""
-        version_file = os.path.join(self._plugins_dir, f".{plugin_name}.version")
-        if os.path.isfile(version_file):
-            with open(version_file, "r", encoding="utf-8") as f:
-                return f.read().strip()
+        """从本地 config/plugins.json 中读取插件版本。"""
+        cfg_path = self._local_config_path
+        if not os.path.isfile(cfg_path):
+            logger.warning("Local config not found: %s", cfg_path)
+            return None
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for p in data.get("plugins", data if isinstance(data, list) else []):
+                if isinstance(p, dict) and p.get("name") == plugin_name:
+                    return p.get("version")
+        except Exception as exc:
+            logger.warning("Failed to read local config: %s", exc)
         return None
 
     def set_local_version(self, plugin_name: str, version: str):
-        """写入本地版本标记文件。"""
-        version_file = os.path.join(self._plugins_dir, f".{plugin_name}.version")
-        os.makedirs(self._plugins_dir, exist_ok=True)
-        with open(version_file, "w", encoding="utf-8") as f:
-            f.write(version.strip())
+        """更新本地 config/plugins.json 中的插件版本。"""
+        cfg_path = self._local_config_path
+        if not os.path.isfile(cfg_path):
+            logger.warning("Local config not found: %s", cfg_path)
+            return
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for p in data.get("plugins", data if isinstance(data, list) else []):
+                if isinstance(p, dict) and p.get("name") == plugin_name:
+                    p["version"] = version
+                    break
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+            logger.info("Updated local version: %s -> %s", plugin_name, version)
+        except Exception as exc:
+            logger.warning("Failed to update local config: %s", exc)
 
     # ── 检查单个插件更新 ───────────────────────────────────
 
@@ -111,7 +155,7 @@ class PluginUpdater:
                     "name": plugin_name,
                     "local_version": local_ver or "(not installed)",
                     "remote_version": remote_ver,
-                    "download_url": info.get("download_url", ""),
+                    "download_url": self._build_download_url(plugin_name, remote_ver),
                     "display_name": info.get("display_name", plugin_name),
                 }
             return None  # 版本一致
@@ -191,7 +235,7 @@ class PluginUpdater:
                     "name": name,
                     "local_version": local_ver or "(not installed)",
                     "remote_version": remote_ver,
-                    "download_url": info.get("download_url", ""),
+                    "download_url": self._build_download_url(name, remote_ver),
                     "display_name": info.get("display_name", name),
                 })
         self._update_results = updates

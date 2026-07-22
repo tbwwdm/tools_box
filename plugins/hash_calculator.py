@@ -183,6 +183,7 @@ class HashCalculator(QWidget):
     def __init__(self):
         super().__init__()
         self._current_file = ""
+        self.resize(800, 600)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -343,6 +344,6 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     w = HashCalculator()
-    w.resize(760, 560)
+    w.resize(800, 600)
     w.show()
     sys.exit(app.exec())
