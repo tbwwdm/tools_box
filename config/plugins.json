@@ -84,7 +84,7 @@
       "description": "远程 Docker 管理：容器、镜像、网络、批量操作",
       "description_en": "Remote Docker management: containers, images, network",
       "tags": ["docker", "container"],
-      "download_url": "https://github.com/LegendaryScriptGenew/tools_box/releases/download/v1.0.1/ims_tool.pyd"
+      "download_url": "https://github.com/LegendaryScriptGenew/tools_box/releases/download/v1.0.1/docker_tools.pyd"
     },
     {
       "name": "yum_manager",
