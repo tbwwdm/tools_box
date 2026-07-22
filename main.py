@@ -138,6 +138,14 @@ class ToolCard(QFrame):
         name.setStyleSheet("color: #2d3436;")
         layout.addWidget(name)
 
+        # ── 版本号 ──
+        ver_text = f"v{self._info.get('version', '0.0.0')}"
+        ver_label = QLabel(ver_text)
+        ver_label.setAlignment(Qt.AlignCenter)
+        ver_label.setFont(QFont("Consolas", 8))
+        ver_label.setStyleSheet("color: #b2bec3; margin-bottom: 2px;")
+        layout.addWidget(ver_label)
+
         # ── 简短描述 ──
         desc_text = self._info.get("description", "")
         if len(desc_text) > 30:
@@ -704,11 +712,42 @@ class MainWindow(QMainWindow):
     # ── 启动插件 ────────────────────────────────────────────
 
     def _on_launch_plugin(self, plugin_info: dict):
-        """点击[启动] → 检查更新 → 加载插件 → 切换界面。"""
+        """点击[启动] → 检查更新 → 加载插件。"""
         pname = plugin_info.get("name", "")
         display = plugin_info.get("display_name", pname)
         self._set_status(f"正在处理: {display} ...")
-        self._do_launch(pname)
+
+        # 先检查更新（后台线程，成功后有更新就弹窗，否则直接加载）
+        def _check_first():
+            try:
+                manifest = self._plugin_updater.fetch_remote_manifest()
+                if manifest:
+                    update_info = self._plugin_updater.check_plugin_update(
+                        pname, manifest
+                    )
+                    if update_info:
+                        self._upgrade_info = (plugin_info, update_info)
+                        self._launch_ready.emit("__update_prompt__")
+                        return
+            except Exception:
+                pass
+            self._launch_ready.emit(pname)
+
+        threading.Thread(target=_check_first, daemon=True).start()
+
+    def _show_update_prompt(self):
+        """弹更新窗（主线程执行）。"""
+        if not self._upgrade_info:
+            return
+        pinfo, uinfo = self._upgrade_info
+        self._upgrade_info = None
+        dlg = UpdateDialog(pinfo, uinfo, self)
+        if dlg.exec() != QDialog.Accepted:
+            # 用户点取消 → 直接加载本地版本
+            self._do_launch(pinfo.get("name", ""))
+            return
+        if dlg.user_wants_update():
+            self._download_and_launch(pinfo, uinfo)
 
     # ── 待开发占位点击 ─────────────────────────────────────
 
@@ -862,7 +901,20 @@ class MainWindow(QMainWindow):
         thread.start()
 
     def _do_launch(self, plugin_name: str):
-        """加载插件 .pyd 并打开独立窗口。"""
+        """加载插件 .pyd 并打开独立窗口（由信号触发，主线程执行）。"""
+        # 特殊值：弹更新提示
+        if plugin_name == "__update_prompt__":
+            if self._upgrade_info:
+                pinfo, uinfo = self._upgrade_info
+                self._upgrade_info = None
+                dlg = UpdateDialog(pinfo, uinfo, self)
+                if dlg.exec() != QDialog.Accepted:
+                    self._do_launch(pinfo.get("name", ""))
+                    return
+                if dlg.user_wants_update():
+                    self._download_and_launch(pinfo, uinfo)
+            return
+
         display = self._plugins_map.get(plugin_name, {}).get(
             "display_name", plugin_name)
         self._set_status(f"正在加载: {display} ...")

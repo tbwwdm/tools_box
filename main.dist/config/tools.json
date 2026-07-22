@@ -1,0 +1,76 @@
+{
+  "tools": [
+    {
+      "name": "Linux工具集",
+      "name_en": "Linux Tools",
+      "description": "Linux服务器管理工具集：用户管理（新增/删除）、SSH配置（端口/root登录）、登录测试、用户列表获取、安全基线检查",
+      "description_en": "Linux server management toolkit: User management (add/delete), SSH configuration (port/root login), login test, user list retrieval, security baseline check",
+      "module": "Linux_Tools_sub",
+      "class": "LinuxToolsGUI",
+      "icon": "💻"
+    },
+    {
+      "name": "密码生成器",
+      "name_en": "Password Generator",
+      "description": "生成随机密码，支持单个生成、批量生成、Excel文件处理，自动保存日志",
+      "description_en": "Generate random passwords, support single generation, batch generation, Excel file processing, auto-save logs",
+      "module": "Tool_Passwd_Creat_sub",
+      "class": "PasswdTool",
+      "icon": "🔑"
+    },
+    {
+      "name": "PDF工具集",
+      "name_en": "PDF Tools",
+      "description": "PDF处理工具：支持PDF合并、拆分、A4多页拼版，支持文件拖拽输入。",
+      "description_en": "PDF processing tools: Support PDF merge, split, A4 multi-page layout, support file drag-and-drop input.",
+      "module": "PDF_Tool_sub",
+      "class": "PDFToolBox",
+      "icon": "📄"
+    },
+    {
+      "name": "网段Ping扫描器",
+      "name_en": "Network Ping Scanner",
+      "description": "批量Ping扫描IP网段，可视化网格显示通断状态，支持两轮重试机制",
+      "description_en": "Batch Ping scan IP network segments, visual grid display of connectivity status, support two-round retry mechanism",
+      "module": "Ping_Scanner_sub",
+      "class": "PingScanner",
+      "icon": "🌐"
+    },
+    {
+      "name": "IMS工具",
+      "name_en": "IMS Tool",
+      "description": "IMS 综合工具：抓包(SBCM/tcpdump) + 网元升级 + 日志查看",
+      "description_en": "IMS comprehensive tool: Packet capture (SBCM/tcpdump) + NE upgrade + Log viewer",
+      "module": "IMS_Tool_sub",
+      "class": "IMSTool",
+      "icon": "📦"
+    },
+    {
+      "name": "Docker自动化",
+      "name_en": "Docker Automation",
+      "description": "远程Docker管理，容器创建/删除/导入/导出，镜像管理，网络管理，批量操作",
+      "description_en": "Remote Docker management, container create/delete/import/export, image management, network management, batch operations",
+      "module": "Linux_Docker_Tool_sub",
+      "class": "DockerManager",
+      "icon": "🐳"
+    },
+    {
+      "name": "YUM源管理器",
+      "name_en": "YUM Repository Manager",
+      "description": "Linux系统管理工具箱：\n  1. YUM服务器配置 — 创建本地/Web yum源，防火墙/SELinux一键关闭\n  2. YUM客户端配置 — .repo文件分发与检测\n  3. NTP时间同步 — 批量配置/还原/状态检查（需提前安装chrony）\n  4. 系统初始化 — 批量执行初始化任务\n支持Excel导入服务器列表，后台异步执行不卡界面。",
+      "description_en": "Linux System Management Toolbox:\n  1. YUM Server Config - Create local/web yum repository, firewall/SELinux disable\n  2. YUM Client Config - .repo file distribution and detection\n  3. NTP Time Sync - Batch configure/restore/status check (requires chrony)\n  4. System Init - Batch execute initialization tasks\nSupports Excel import for server lists, async execution without UI freeze.",
+      "module": "Linux_yum_sub",
+      "class": "MainWindow",
+      "icon": "📦"
+    },
+    {
+      "name": "IPv6掩码计算器",
+      "name_en": "IPv6 Mask Calculator",
+      "description": "IPv6地址规划与计算：地址展开/压缩、Prefix计算、地址范围、类型识别",
+      "description_en": "IPv6 address planning and calculation",
+      "module": "Ipv6_CDR",
+      "class": "IPv6CalculatorApp",
+      "icon": "🌐"
+    }
+  ]
+}

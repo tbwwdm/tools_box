@@ -1,0 +1,12 @@
+{
+  "hidden_columns": [
+    "ipv6_1",
+    "cpu",
+    "mem_gb",
+    "shm_size",
+    "ipv4_2",
+    "ipv6_2",
+    "ipv4_3",
+    "ipv6_3"
+  ]
+}
