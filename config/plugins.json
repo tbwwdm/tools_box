@@ -1,0 +1,175 @@
+{
+  "version": "1.0.0",
+  "description": "工具箱插件注册表",
+  "plugins": [
+    {
+      "name": "demo_plugin",
+      "display_name": "示例工具",
+      "display_name_en": "Demo Tool",
+      "version": "1.0.0",
+      "class_name": "DemoPlugin",
+      "icon": "🧪",
+      "description": "框架加载测试示例工具",
+      "description_en": "Framework loading test demo tool",
+      "tags": [
+        "demo",
+        "test"
+      ]
+    },
+    {
+      "name": "linux_tools",
+      "display_name": "Linux工具集",
+      "display_name_en": "Linux Tools",
+      "version": "1.0.0",
+      "class_name": "LinuxToolsPlugin",
+      "icon": "💻",
+      "description": "Linux 服务器管理：用户管理、SSH 配置、安全基线检查",
+      "description_en": "Linux server management: users, SSH, security baseline",
+      "tags": [
+        "linux",
+        "admin"
+      ]
+    },
+    {
+      "name": "password_generator",
+      "display_name": "密码生成器",
+      "display_name_en": "Password Generator",
+      "version": "1.0.0",
+      "class_name": "PasswordPlugin",
+      "icon": "🔑",
+      "description": "生成随机密码，支持单/批量生成，Excel 处理",
+      "description_en": "Generate passwords, batch mode, Excel support",
+      "tags": [
+        "security",
+        "password"
+      ]
+    },
+    {
+      "name": "pdf_tools",
+      "display_name": "PDF工具集",
+      "display_name_en": "PDF Tools",
+      "version": "1.0.0",
+      "class_name": "PDFPlugin",
+      "icon": "📄",
+      "description": "PDF 合并、拆分、A4 多页拼版，支持拖拽",
+      "description_en": "PDF merge, split, multi-page layout, drag-drop",
+      "tags": [
+        "pdf",
+        "document"
+      ]
+    },
+    {
+      "name": "ping_scanner",
+      "display_name": "网段Ping扫描器",
+      "display_name_en": "Network Ping Scanner",
+      "version": "1.0.0",
+      "class_name": "PingScannerPlugin",
+      "icon": "🌐",
+      "description": "批量 Ping 扫描 IP 网段，可视化网格显示",
+      "description_en": "Batch ping scan IP ranges, visual grid display",
+      "tags": [
+        "network",
+        "ping"
+      ]
+    },
+    {
+      "name": "ims_tool",
+      "display_name": "IMS工具",
+      "display_name_en": "IMS Tool",
+      "version": "1.0.0",
+      "class_name": "IMSToolPlugin",
+      "icon": "📦",
+      "description": "IMS 抓包、网元升级、日志查看",
+      "description_en": "IMS packet capture, NE upgrade, log viewer",
+      "tags": [
+        "ims",
+        "telecom"
+      ]
+    },
+    {
+      "name": "docker_tools",
+      "display_name": "Docker自动化",
+      "display_name_en": "Docker Automation",
+      "version": "1.0.1",
+      "class_name": "DockerPlugin",
+      "icon": "🐳",
+      "description": "远程 Docker 管理：容器、镜像、网络、批量操作",
+      "description_en": "Remote Docker management: containers, images, network",
+      "tags": [
+        "docker",
+        "container"
+      ]
+    },
+    {
+      "name": "yum_manager",
+      "display_name": "YUM源管理器",
+      "display_name_en": "YUM Repo Manager",
+      "version": "1.0.0",
+      "class_name": "YumPlugin",
+      "icon": "📦",
+      "description": "YUM 服务器配置、客户端 .repo 文件分发与检测",
+      "description_en": "YUM server config, client .repo distribution",
+      "tags": [
+        "yum",
+        "linux"
+      ]
+    },
+    {
+      "name": "ipv6_calculator",
+      "display_name": "IPv6掩码计算器",
+      "display_name_en": "IPv6 Calculator",
+      "version": "1.0.0",
+      "class_name": "IPv6Plugin",
+      "icon": "🌐",
+      "description": "IPv6 地址展开/压缩、Prefix 计算、类型识别",
+      "description_en": "IPv6 expand/compress, prefix calculation, type detect",
+      "tags": [
+        "network",
+        "ipv6"
+      ]
+    },
+    {
+      "name": "chrony_ntp_sync",
+      "display_name": "Chrony时间同步",
+      "display_name_en": "Chrony Time Sync",
+      "version": "1.0.0",
+      "class_name": "ChronyNtpSyncPlugin",
+      "icon": "⏱",
+      "description": "批量 Chrony/NTP 时间同步配置、还原、状态检查",
+      "description_en": "Batch Chrony/NTP config, restore, status check",
+      "tags": [
+        "chrony",
+        "ntp",
+        "linux"
+      ]
+    },
+    {
+      "name": "hash_calculator",
+      "display_name": "Hash计算器",
+      "display_name_en": "Hash Calculator",
+      "version": "1.0.0",
+      "class_name": "HashCalculatorPlugin",
+      "icon": "#️⃣",
+      "description": "MD5/SHA1/SHA256/SHA512 哈希值计算",
+      "description_en": "MD5/SHA1/SHA256/SHA512 hash calculation",
+      "tags": [
+        "hash",
+        "security"
+      ]
+    },
+    {
+      "name": "system_init",
+      "display_name": "系统初始化",
+      "display_name_en": "System Init",
+      "version": "1.0.0",
+      "class_name": "SystemInitPlugin",
+      "icon": "⚙️",
+      "description": "批量执行系统初始化任务",
+      "description_en": "Batch system initialization tasks",
+      "tags": [
+        "init",
+        "linux"
+      ]
+    }
+  ]
+}
