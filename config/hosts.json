@@ -418,16 +418,16 @@
     "port": 22,
     "user": "root",
     "pwd": "Genew@123",
-    "name": "CTGL-SBCM01",
-    "desc": "CTGL-SBCM01"
+    "name": "CTG-SBCM01",
+    "desc": "CTG-SBCM01"
   },
   {
     "host": "10.10.60.65",
     "port": 22,
     "user": "root",
     "pwd": "Genew@123",
-    "name": "CTGL-SBCM02",
-    "desc": "CTGL-SBCM02"
+    "name": "CTG-SBCM02",
+    "desc": "CTG-SBCM02"
   },
   {
     "host": "10.10.60.54",
